@@ -64,7 +64,7 @@ for "discriminative class models under best-fit alignment". Re-check novelty bef
 
 ## Status (October 2026)
 
-- Code: package `redraw` (39 CPU tests pass, version 0.4.0). `notebooks/round1.ipynb` trains `redraw`,
+- Code: package `redraw` (41 CPU tests pass, version 0.4.0). `notebooks/round1.ipynb` trains `redraw`,
   `redraw_hdr`, `baseline`, `redraw_norender` (ConvNeXt-T, 40 epochs, validation only).
   `notebooks/round2.ipynb` reuses those and adds `redraw_hdr_sw` (StrokeWarp), `redraw_hdr_e2e`
   (honest-training ablation) and `redraw_hdr_nohead` (no stroke head), with `verify_eval`
@@ -132,9 +132,53 @@ the next mechanism.
   made from the network's own parse (fixed draws). Only possible for a network that parses strokes.
 - Diversity (pairwise averages), scarce data (2/5/10%, 2000 steps, baseline vs coupled vs honest),
   damaged scans (7 corruptions x 2 levels).
-- Plan after round 3: fix the engine (backbone, resolution) and the method on validation; final
-  round = 3 seeds of the method and of the baseline on train+val with that engine, test once;
-  report single-network mean +- s.d., the seed ensemble, McNemar and bootstrap intervals.
+### Round-3 results (validation, 5-view TTA, one seed each)
+
+| network | final | image head | stroke head | errors | note |
+|---|---|---|---|---|---|
+| baseline_fp32 | 97.91% | 97.91% | - | 226 | control |
+| redraw_hdr (coupled) | 97.78% | 97.61% | 97.40% | 240 | |
+| redraw_hdr_hr (honest) | 97.86% | 97.73% | 97.46% | 232 | vs control 54/60, p = 0.64; check +4/-1, cost alone 93.7% |
+| baseline_in12k | 97.65% | | | 254 | worse |
+| baseline_v2 | 97.83% | | | 235 | not better |
+| baseline224 | 97.66% | | | 253 | worse than 128 px (57/84, p = 0.03): peaks at epoch 20-25, then overfits |
+| redraw_hdr_hr224 | 97.87% | 97.63% | 97.28% | 231 | holds at 224 px (vs baseline224 71/49, p = 0.055) |
+
+- Honest routing recovers about half of the image-head cost (97.61 -> 97.73, control 97.91) and
+  matches the control on the final output; no significant difference either way.
+- Test-time redrawing: no gain at 128 px; at 224 px one view 97.80 -> 97.91 (18/6, p = 0.02).
+- Average of all 13 networks 98.09%; best pairs 98.04-98.06. Mixing families does not add more
+  diversity than another seed (mean pair gain: coupled-plain +0.16, plain-plain +0.14,
+  honest-plain +0.10).
+- Scarce data (one seed): honest beats control at every share: 2% 94.19 vs 94.04, 5% 95.54 vs
+  95.35, 10% 96.12 vs 95.95; coupled in between; the check rescues more at 2% (+12/-8 honest, +14/-6 coupled).
+- Damaged scans: learning to redraw with coupled routing gives the backbone a shape bias.
+  Heavy blur 93.28 vs 90.20, 12 px 90.03 vs 86.23, rotation 20 degrees +0.4; but heavy noise 93.52
+  vs 95.56, uneven light 84.49 vs 88.97, salt and pepper 90.04 vs 92.99. Honest routing sits in
+  between. Mean over the 14: control 94.39, coupled 94.28, honest 94.25.
+
+### Assessment after round 3
+
+The random split is saturated: every recogniser tried (8 designs, 3 backbones, 2 resolutions)
+lands at 97.65-97.98% on validation, the differences are inside noise except the two worse
+pretrainings and 224 px, and averages of many networks stop at about 98.1%. The earlier 98.12%
+(six networks) is at that ceiling. Expected test results of the final run (from validation, and
+val -> test was +0.04 for the earlier ensemble): single networks about 97.9%, average of the
+method's three seeds about 98.0%, all seven about 98.05-98.1%; above 98.12% is possible but not
+likely, and no difference of that size can be significant (95% interval +-0.24 points). The paper
+must therefore rest on the mechanism and methodology, the analysis of the ceiling, and where
+structure helps (unfamiliar handwriting, scarce data, blur and low resolution), with the
+standard benchmark reported honestly (above the best published 97.08% by about 0.8 points).
+
+### Final run (`notebooks/final.ipynb`)
+
+Fixed before looking at test: ConvNeXt-T in22k, 128 px, 40 epochs; `redraw_hdr_hr` (method) x 3
+seeds, `baseline_fp32` (control) x 3 seeds, `redraw_hdr` (coupled) x 1, all on train+val (tag
+`full_s<seed>`). Test once: singles (mean +- s.d.), seed averages, McNemar, bootstrap intervals,
+hard pairs, parse, check, test-time redrawing; accuracy by familiarity (most similar training
+image on 32 x 32 thumbnails, `analysis.familiarity`; bins: least familiar 5%, 5-10%, 10-25%,
+rest), also on validation for the round-3 networks; damaged scans on test; scarce data with seeds
+1-2 added and all three evaluated on test.
 
 ## Data
 

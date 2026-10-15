@@ -1,6 +1,9 @@
 import numpy as np
 
-from redraw.analysis import bootstrap_ci, errors_in_pairs, mcnemar, pairwise_average
+import torch
+
+from redraw.analysis import (accuracy_by_bin, bootstrap_ci, errors_in_pairs, familiarity, mcnemar,
+                             pairwise_average)
 from redraw.data import stratified_subset
 
 
@@ -34,3 +37,16 @@ def test_stratified_subset_takes_the_same_share_of_every_class():
     counts = np.bincount(labels[sub], minlength=4)
     assert counts.tolist() == [10, 5, 2, 1] and len(np.unique(sub)) == len(sub)
     assert np.array_equal(sub, stratified_subset(idx, labels, 0.1, seed=1))
+
+
+def test_familiarity_finds_the_near_duplicate():
+    torch.manual_seed(0)
+    ref = torch.rand(50, 64)
+    query = torch.cat([ref[7:8] * 2 + 0.01 * torch.randn(1, 64), torch.rand(1, 64)])  # a brighter copy of 7, and a stranger
+    sim, idx = familiarity(query, ref, chunk=1)
+    assert idx[0] == 7 and sim[0] > 0.99 and sim[1] < sim[0]
+
+
+def test_accuracy_by_bin():
+    out = accuracy_by_bin([1, 0, 1, 1], [0, 0, 1, 1])
+    assert out == {0: (0.5, 2), 1: (1.0, 2)}

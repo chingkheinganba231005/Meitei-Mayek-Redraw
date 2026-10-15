@@ -3,6 +3,8 @@
 import itertools
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.stats import binomtest
 
 
@@ -40,3 +42,28 @@ def errors_in_pairs(p, labels, pairs):
     pred = p.argmax(1)
     return {f"{a:03d}/{b:03d}": int((((labels == a) & (pred == b)) | ((labels == b) & (pred == a))).sum())
             for a, b in pairs}
+
+
+def familiarity(query, ref, chunk=4096):
+    """How familiar each query image is: cosine similarity of its most similar reference image, and its index.
+
+    ``query`` (N, D) and ``ref`` (M, D) are flattened images (any model-free representation, e.g.
+    32 x 32 thumbnails); each is centred and normalised here. Returns two tensors of length N.
+    """
+    def prep(x):
+        x = x.float()
+        return F.normalize(x - x.mean(1, keepdim=True), dim=1)
+
+    q, r = prep(query), prep(ref)
+    best, arg = [], []
+    for i in range(0, len(q), chunk):
+        v, j = (q[i:i + chunk] @ r.T).max(1)
+        best.append(v)
+        arg.append(j)
+    return torch.cat(best), torch.cat(arg)
+
+
+def accuracy_by_bin(ok, bins):
+    """Accuracy of a boolean "right" vector within each bin of an integer bin vector: {bin: (accuracy, n)}."""
+    ok, bins = np.asarray(ok, bool), np.asarray(bins)
+    return {int(b): (float(ok[bins == b].mean()), int((bins == b).sum())) for b in np.unique(bins)}
