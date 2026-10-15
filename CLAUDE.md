@@ -202,13 +202,17 @@ rest), also on validation for the round-3 networks; damaged scans on test; scarc
 - Errors: four pairs = 54-59% of every network's errors (1,802 test images); 130 test images wrong
   for all 7; pixel nearest neighbour 86.6% (52.7% on the least familiar 5%), networks flat 97.3-98.0%.
 
-## Paper (draft, not in the repository)
+## Paper (draft v1, not in the repository)
 
 "Reading by redrawing: stroke-level explanations for handwritten Meitei Mayek recognition at no cost
-in accuracy", Springer sn-jnl, 22 pages, built from the results files only (figures by
-`make_figs.py`). Claims: a mechanism (unsupervised Bezier parse + template check), a training
-principle (honest gradient routing), a shape-bias dial, and an error analysis; no claim to beat
-98.12%. The earlier paper is cited as under review and must be declared in the cover letter.
+in accuracy", Springer sn-jnl, 23 pages, built from the results files only (figures by
+`make_figs.py`); Algorithm 1 gives one training step with the stop-gradients. Claims: a mechanism
+(unsupervised Bezier parse + template check), a training principle (honest gradient routing; cites
+Cloud et al. 2024 "gradient routing" and concept-bottleneck leakage as related), a shape-bias dial, and
+an error analysis; no claim to beat 98.12%. The earlier paper is cited as under review; the cover
+letter declares it and its earlier desk rejection at The Visual Computer. Paired tests are stated as
+conditional on the shared test set. v2 will add the round-5 results (erasure test, Devanagari, dial,
+selective prediction, template and vector figures).
 
 ## Round 5 (`notebooks/extras.ipynb`, code 0.5.0), for reviewers
 
