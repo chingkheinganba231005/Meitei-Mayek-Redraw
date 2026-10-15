@@ -37,7 +37,23 @@ under consideration when submitting). Best published result by others: 97.08% (H
    class must redraw the image better than each wrong candidate by a margin); a plain cross-entropy
    on the re-ranked logits (fused logits held fixed) trains templates and the two scalars. The
    fitter is never rewarded for fitting a wrong class badly. Tests in `tests/test_hypotheses.py`
-   enforce this routing.
+   enforce this routing. `honest=False` (config `redraw_hdr_e2e`) is the ablation.
+4. **StrokeWarp (learning methodology).** Self-structured augmentation: half of each batch is
+   deformed along the parse of the network's own weight-averaged copy. Inner control points move
+   (curvature changes, end points fixed so joined strokes stay joined), free tails grow or shrink
+   along their own direction, pen width never changes; each output pixel samples the real ink back
+   along a softmax-weighted field over the bent stroke samples. Starts after `warmup` epochs.
+   (`redraw/strokewarp.py`, config `redraw_hdr_sw`.) A first version with rigid per-stroke
+   rotation/scale/shift tore junctions and thickened strokes, hence bends and tails only.
+
+Framing for the paper (owner's concern after the desk rejection): lead with the principle (honest
+evidence: a recogniser whose redrawing evidence cannot be gamed) and the two learning methods, not
+with the stroke branch, which on its own reads as an extra module on a CNN. Ancestors to cite:
+elastic/deformable templates (Hinton, Williams, Revow 1991-96), Bayesian Program Learning (Lake et
+al. 2015), latent-SVM deformable part models (Felzenszwalb et al. 2010), render-and-compare
+hypothesis scoring in 6D pose (e.g. MegaPose), stroke warping on online data (Gurmukhi, ICFHR 2018).
+No prior work found on the honest gradient routing or on parse-guided stroke-wise warping of
+offline images (searched October 2026).
 
 Related work to cite and differentiate: Revow, Williams & Hinton 1996 (deformable spline digit
 models, EM fitting, slow, 10 classes); Hinton, Williams & Revow 1991; Mihai & Hare 2021
@@ -48,10 +64,14 @@ for "discriminative class models under best-fit alignment". Re-check novelty bef
 
 ## Status (October 2026)
 
-- Code: package `redraw` (19 CPU tests pass). `notebooks/round1.ipynb` trains `redraw`,
+- Code: package `redraw` (26 CPU tests pass). `notebooks/round1.ipynb` trains `redraw`,
   `redraw_hdr`, `baseline`, `redraw_norender` (ConvNeXt-T, 40 epochs, validation only).
-  `redraw_hdr_e2e` (same network trained end to end, no gradient routing) is the ablation that
-  tests the training principle; planned for round 2.
+  `notebooks/round2.ipynb` reuses those and adds `redraw_hdr_sw` (StrokeWarp), `redraw_hdr_e2e`
+  (honest-training ablation) and `redraw_hdr_nohead` (no stroke head), with `verify_eval`
+  (top-3 recall, cost-only accuracy, rescued/broken counts) and figures.
+- Round-1 configs must not change while the owner may be running round 1 from `main`:
+  checked by training all four on fake data with the first commit and the current code
+  (identical histories).
 - Checks so far: per-image fitting traces all 55 real class samples with <= 8 strokes; the
   amortised parser learns from rendering losses alone (synthetic); on a toy set of look-alike
   classes (one extra small stroke), the template cost alone picks the right class 66% of the time

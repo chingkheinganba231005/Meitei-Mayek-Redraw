@@ -56,3 +56,14 @@ def test_baseline_training(setup):
                batch=8, aug="geometric")
     model = T.train("b", cfg, idx["train"], "dev", store, labels, tmp_path / "work", val_idx=idx["val"])
     assert set(T.predict(model, idx["test"], cfg, store)) == {"logits", "fused", "img"}
+
+
+def test_strokewarp_training(setup):
+    tmp_path, store, labels, idx = setup
+    cfg = dict(arch="resnet18", drop_path=0.0, pretrained=False, strokes=True, K=4, render_weight=1.0,
+               hdr=True, hdr_k=2, hdr_M=1, hdr_S=4, epochs=2, lr=1e-3, wd=0.0, batch=8, aug="geometric",
+               strokewarp=dict(p=1.0, warmup=0))
+    model = T.train("sw", cfg, idx["train"], "dev", store, labels, tmp_path / "work", val_idx=idx["val"])
+    ck = torch.load(tmp_path / "work" / "runs" / "sw" / "dev" / "final.pt", weights_only=False)
+    assert {"bce", "hdr_fit", "hdr_margin", "hdr_disc", "val_logits"} <= set(ck["history"][-1])
+    assert set(T.predict(model, idx["test"], cfg, store)) == {"logits", "fused", "img", "vec"}

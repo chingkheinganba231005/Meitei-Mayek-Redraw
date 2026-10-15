@@ -45,6 +45,11 @@ CONFIGS = {
 # ablation of the training principle: the same network trained end to end, so the fitter may
 # learn to fit wrong classes badly and the templates learn from every class's images
 CONFIGS["redraw_hdr_e2e"] = dict(CONFIGS["redraw_hdr"], honest=False)
+# StrokeWarp: half of each batch is deformed stroke by stroke along the network's own parse
+CONFIGS["redraw_hdr_sw"] = dict(CONFIGS["redraw_hdr"],
+                                strokewarp=dict(p=0.5, warmup=10, bend=0.035, tail=0.2, free=0.06, sigma=0.03))
+# the hypothesis check without the stroke head: the CNN proposes, the redrawing verifies
+CONFIGS["redraw_hdr_nohead"] = dict(CONFIGS["redraw_hdr"], stroke_head=False)
 
 
 def mlp(i, h, o, n=2):
@@ -311,7 +316,7 @@ class HypothesisRedrawer(nn.Module):
 class StrokeNet(nn.Module):
     def __init__(self, arch, num_classes=55, in_chans=1, drop_path=0.1, pretrained=True, strokes=True,
                  K=12, d=256, dec_layers=3, head_layers=2, G=48, T=32, hdr=False, hdr_k=3, hdr_M=2,
-                 hdr_S=6, hdr_G=32, honest=True):
+                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True):
         super().__init__()
         self.backbone = timm.create_model(arch, pretrained=pretrained, num_classes=0, in_chans=in_chans,
                                           drop_path_rate=drop_path)
@@ -323,7 +328,7 @@ class StrokeNet(nn.Module):
             self.taps = [next(i for i, f in enumerate(info) if f["reduction"] == r) for r in (8, 16)]
             chs = [info[i]["num_chs"] for i in self.taps]
             self.decoder = StrokeDecoder(chs, d=d, K=K, layers=dec_layers)
-            self.head = StrokeHead(chs[0], num_classes, d=d, layers=head_layers, T=T)
+            self.head = StrokeHead(chs[0], num_classes, d=d, layers=head_layers, T=T) if stroke_head else None
             if hdr:
                 self.hdr = HypothesisRedrawer(num_classes, d=d, M=hdr_M, S=hdr_S)
                 self.hdr_k, self.hdr_G, self.honest = hdr_k, hdr_G, honest
@@ -332,7 +337,8 @@ class StrokeNet(nn.Module):
 
     def new_parameters(self):
         """Parameters that start from scratch (they get a higher learning rate)."""
-        mods = [self.img_head] + ([self.decoder, self.head] if self.strokes else [])
+        mods = [self.img_head] + ([self.decoder] if self.strokes else [])
+        mods += [self.head] if self.strokes and self.head is not None else []
         extra = [self.beta, self.gamma] if self.hdr is not None else []
         mods += [self.hdr] if self.hdr is not None else []
         return [p for m in mods for p in m.parameters()] + extra
@@ -346,12 +352,15 @@ class StrokeNet(nn.Module):
         final, inter = self.backbone.forward_intermediates(x, indices=self.taps)
         img_logits = self.img_head(self.backbone.forward_head(final))
         ctrl, width, exist, mem, mpos = self.decoder(inter)
-        pts = curve_points(ctrl, self.T)
-        seen = (pts + jitter * torch.randn_like(pts)).clamp(0, 1) if jitter else pts
-        vec_logits = self.head(seen, width, exist, inter[0])
-        fused = img_logits + vec_logits
-        out = {"img": img_logits, "vec": vec_logits, "fused": fused, "logits": fused,
-               "ctrl": ctrl, "width": width, "exist": exist}
+        out = {"img": img_logits, "ctrl": ctrl, "width": width, "exist": exist}
+        if self.head is not None:
+            pts = curve_points(ctrl, self.T)
+            seen = (pts + jitter * torch.randn_like(pts)).clamp(0, 1) if jitter else pts
+            out["vec"] = self.head(seen, width, exist, inter[0])
+            fused = img_logits + out["vec"]
+        else:  # strokes only feed the hypothesis check and the reconstruction loss
+            fused = img_logits
+        out.update(fused=fused, logits=fused)
         if draw:
             with torch.autocast(x.device.type, enabled=False):
                 out["render"], out["dist"], out["pts"] = render(ctrl.float(), width.float(), exist.float(),
@@ -398,5 +407,6 @@ def make_model(cfg, num_classes=55, pretrained=None, device="cpu"):
     model = StrokeNet(cfg["arch"], num_classes, drop_path=cfg["drop_path"], pretrained=pretrained,
                       strokes=cfg.get("strokes", True), K=cfg.get("K", 12), G=cfg.get("G", 48),
                       hdr=cfg.get("hdr", False), hdr_k=cfg.get("hdr_k", 3), hdr_M=cfg.get("hdr_M", 2),
-                      hdr_S=cfg.get("hdr_S", 6), honest=cfg.get("honest", True))
+                      hdr_S=cfg.get("hdr_S", 6), honest=cfg.get("honest", True),
+                      stroke_head=cfg.get("stroke_head", True))
     return model.to(device).to(memory_format=torch.channels_last)

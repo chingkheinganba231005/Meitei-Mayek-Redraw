@@ -92,3 +92,17 @@ def test_end_to_end_ablation_lets_every_loss_reach_the_fitter():
     assert model.hdr.offset[0].weight.grad.abs().sum() > 0           # the fitter now learns to discriminate
     touched = set(torch.nonzero(model.hdr.t_ctrl.grad.abs().flatten(1).sum(1) > 0).flatten().tolist())
     assert touched == set(out["cand"].flatten().tolist())
+
+
+def test_verify_eval_counts(tmp_path):
+    from helpers import fake_zip
+    from redraw.data import Store, build_cache, load_index
+    from redraw.split import make_split
+    from redraw.train import verify_eval
+    fake_zip(tmp_path / "t.zip", classes=7)
+    split_dir, _ = make_split(tmp_path / "t.zip", tmp_path / "data")
+    index, labels, idx = load_index(split_dir)
+    store = Store(build_cache(index.file.tolist(), 64, tmp_path / "cache", workers=1), "cpu", idx["train"])
+    r = verify_eval(_model(), idx["test"], store, labels)
+    assert set(r) == {"topk_recall", "cost_only", "fused", "final", "rescued", "broken"}
+    assert 0 <= r["cost_only"] <= r["topk_recall"] <= 1

@@ -6,7 +6,9 @@ compared with the ink), ``head_weight`` (weight of the two separate head
 losses), ``jitter`` (noise on the stroke samples the stroke head sees) and
 ``new_lr`` (learning-rate multiplier for the parts that start from scratch).
 With ``hdr`` the hypothesis check is added (``hdr_fit``, ``hdr_disc``,
-``hdr_wrong``, ``template_lr``).
+``hdr_wrong``, ``template_lr``). ``strokewarp`` (a dict, see
+``strokewarp.STROKEWARP``) deforms part of each batch stroke by stroke along the
+parse of the network's own weight-averaged copy.
 
 The loss is cross-entropy on the combined logits of the two heads, plus
 ``head_weight`` times the cross-entropy of each head on its own, plus
@@ -48,6 +50,7 @@ from .augment import AUG_PRESETS, augment, view
 from .files import must_write, write_file
 from .model import make_model
 from .render import fit_losses, parse_score, render_loss
+from .strokewarp import STROKEWARP, stroke_warp
 
 DRIVE_EVERY = 5
 LOCAL = Path(os.environ.get("REDRAW_LOCAL_CKPT", Path(tempfile.gettempdir()) / "redraw_ckpt"))
@@ -127,10 +130,10 @@ def compute_loss(model, out, x_ink, y, crit, cfg):
     if "vec" in out:
         hw = cfg.get("head_weight", 0.5)
         loss = loss + hw * (crit(out["img"], y) + crit(out["vec"], y))
-        if cfg.get("render_weight", 1.0) > 0:
-            with torch.autocast(x_ink.device.type, enabled=False):
-                parts = fit_losses(out["render"], out["dist"], out["pts"], out["exist"], ink_target(x_ink, model.G))
-                loss = loss + cfg["render_weight"] * render_loss(parts)
+    if "render" in out and cfg.get("render_weight", 1.0) > 0:
+        with torch.autocast(x_ink.device.type, enabled=False):
+            parts = fit_losses(out["render"], out["dist"], out["pts"], out["exist"], ink_target(x_ink, model.G))
+            loss = loss + cfg["render_weight"] * render_loss(parts)
     if "cost" in out:
         live = out["live"]
         w = torch.where(live, 1.0, cfg.get("hdr_wrong", 0.5))
@@ -184,6 +187,33 @@ def parse_eval(model, idx, store, bs=256):
     return dict(zip(("precision", "recall", "f", "strokes"), m))
 
 
+@torch.no_grad()
+def verify_eval(model, idx, store, labels, bs=512):
+    """What the hypothesis check contributes, on images ``idx``.
+
+    topk_recall: the true class is among the candidates; cost_only: the cheapest redrawing alone
+    picks the true class; fused / final: accuracy before / after the check; rescued / broken:
+    images the check turns from wrong to right / from right to wrong.
+    """
+    model.eval()
+    amp = amp_dtype(store.device)
+    idx = np.asarray(idx)
+    rows = []
+    for i in range(0, len(idx), bs):
+        chunk = idx[i:i + bs]
+        x = store.fetch(chunk, "gray")
+        with torch.autocast("cuda", dtype=amp, enabled=amp is not None):
+            o = model(store.normalize(x, "gray"), draw=False, ink=x)
+        y = torch.as_tensor(labels[chunk], device=x.device)
+        pick = o["cand"].gather(1, o["cost"].float().argmin(1, keepdim=True)).squeeze(1)
+        rows.append(torch.stack([(o["cand"] == y[:, None]).any(1), pick == y,
+                                 o["fused"].argmax(1) == y, o["logits"].argmax(1) == y], 1).cpu())
+    m = torch.cat(rows)
+    return {"topk_recall": m[:, 0].float().mean().item(), "cost_only": m[:, 1].float().mean().item(),
+            "fused": m[:, 2].float().mean().item(), "final": m[:, 3].float().mean().item(),
+            "rescued": int((~m[:, 2] & m[:, 3]).sum()), "broken": int((m[:, 2] & ~m[:, 3]).sum())}
+
+
 def load_model(path, cfg=None, num_classes=55, device="cpu"):
     ck = torch.load(path, map_location=device, weights_only=False)
     cfg = cfg or ck["cfg"]
@@ -224,6 +254,7 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
     crit = nn.CrossEntropyLoss(label_smoothing=cfg.get("smoothing", 0.1))
     draw = cfg.get("strokes", True) and cfg.get("render_weight", 1.0) > 0
     jitter = cfg.get("jitter", 0.01)
+    sw = dict(STROKEWARP, **cfg["strokewarp"]) if cfg.get("strokewarp") else None
     y_all = torch.as_tensor(labels, device=device)
     start, step, history = 1, 0, []
     local = LOCAL / name / tag / "last.pt"
@@ -244,6 +275,11 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         for i in range(steps_per_epoch):
             idx = perm[i * bs:(i + 1) * bs]
             x_ink = augment(store.fetch(idx, "gray"), aug)
+            if sw is not None and epoch > sw["warmup"]:
+                with torch.no_grad(), torch.autocast("cuda", dtype=amp, enabled=amp is not None):
+                    parse = ema.module(store.normalize(x_ink, "gray"), draw=False)
+                chosen = torch.rand(len(idx), device=device) < sw["p"]
+                x_ink = stroke_warp(x_ink, parse["ctrl"], parse["exist"], mask=chosen, **sw)
             y = y_all[torch.as_tensor(idx, device=device)]
             for group in opt.param_groups:
                 group["lr"] = lr_at(step) * group["lr_scale"]

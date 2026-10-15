@@ -21,6 +21,8 @@ small set of pen strokes and classifies those strokes too.
   the candidates by how well each redrawing explains the image. The fitter that
   bends the templates is only ever trained to fit as well as it can; only the
   templates learn to tell classes apart, so the redrawing costs stay honest evidence.
+- **StrokeWarp** deforms training images stroke by stroke along the network's
+  own parse: strokes bend, free tails grow or shrink, joints and pen width stay.
 
 ## Layout
 
@@ -30,7 +32,9 @@ small set of pen strokes and classifies those strokes too.
 | `redraw/model.py` | the network and the experiment configurations |
 | `redraw/train.py` | training loop (EMA, resumable checkpoints), prediction, parse evaluation |
 | `redraw/split.py`, `preprocess.py`, `data.py`, `augment.py` | data split, preprocessing, GPU augmentation |
+| `redraw/strokewarp.py` | StrokeWarp |
 | `notebooks/round1.ipynb` | first experiment: the method (with and without the hypothesis check) vs. plain fine-tuning vs. strokes never compared with the ink |
+| `notebooks/round2.ipynb` | second experiment: StrokeWarp, honest vs. end-to-end training, the check without the stroke head |
 | `tests/` | CPU tests (`python -m pytest`) |
 
 ## Data

@@ -55,3 +55,15 @@ def test_views():
     assert torch.equal(view(x, "id"), x)
     for v in TTA_VIEWS:
         assert view(x, v).shape == x.shape
+
+
+def test_without_stroke_head_strokes_still_learn_from_the_ink():
+    torch.manual_seed(0)
+    model = make_model(dict(TINY, strokes=True, stroke_head=False), 5)
+    x, y = torch.rand(2, 1, 64, 64), torch.tensor([0, 1])
+    out = model(x)
+    assert "vec" not in out and torch.equal(out["fused"], out["img"]) and "render" in out
+    loss, parts = compute_loss(model, out, x, y, torch.nn.CrossEntropyLoss(), dict(render_weight=1.0))
+    loss.backward()
+    assert set(parts) == {"bce", "prec", "cover", "count"}
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.decoder.parameters())
