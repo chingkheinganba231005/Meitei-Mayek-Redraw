@@ -36,6 +36,8 @@ small set of pen strokes and classifies those strokes too.
 | `notebooks/round1.ipynb` | first experiment: the method (with and without the hypothesis check) vs. plain fine-tuning vs. strokes never compared with the ink |
 | `notebooks/round2.ipynb` | second experiment: StrokeWarp, honest vs. end-to-end training, the check without the stroke head |
 | `notebooks/diagnostics.ipynb` | float32 baseline, diversity of the trained networks, nearest-neighbour memory |
+| `notebooks/round3.ipynb` | honest routing, backbone and 224 px pilot, test-time redrawing, scarce data, damaged scans |
+| `redraw/analysis.py` | paired tests, bootstrap intervals, pairwise averages |
 | `tests/` | CPU tests (`python -m pytest`) |
 
 ## Data

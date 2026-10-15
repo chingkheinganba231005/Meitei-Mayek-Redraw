@@ -15,6 +15,13 @@ the only training signal they get: there are no stroke labels. The stroke
 head turns every stroke into a token (its shape and size, plus the CNN
 features sampled along the curve) and classifies the set of tokens with a
 small transformer. The two heads are combined by adding their logits.
+
+``route`` decides which losses may change which parts. "coupled" (rounds 1-2): every loss reaches
+every part, so the reconstruction losses also reshape the backbone, and the stroke head can move the
+strokes to wherever helps it classify. "honest": the stroke decoder and the hypothesis fitter read the
+backbone's feature maps through a stop-gradient, so drawing never changes what the recogniser sees;
+the stroke head reads features where the strokes are but cannot move them, so the parse stays an
+explanation of the ink. The backbone then learns from classification alone.
 """
 
 import math
@@ -52,6 +59,15 @@ CONFIGS["redraw_hdr_sw"] = dict(CONFIGS["redraw_hdr"],
 CONFIGS["redraw_hdr_nohead"] = dict(CONFIGS["redraw_hdr"], stroke_head=False)
 # the baseline again, with the float32 loss (rounds 1-2 had a bfloat16 loss); new name, new checkpoint
 CONFIGS["baseline_fp32"] = dict(CONFIGS["baseline"])
+# round 3. Honest routing everywhere: reconstruction never reaches the backbone, classification never
+# moves the strokes (see StrokeNet), on top of the honest training of the hypothesis check
+CONFIGS["redraw_hdr_hr"] = dict(CONFIGS["redraw_hdr"], route="honest")
+# backbone pilot at the same 128 px: ImageNet-12k pretraining, and ConvNeXt V2 (masked-autoencoder
+# pretraining, then ImageNet-22k); ``res`` resizes the cached 128 px images on the GPU
+CONFIGS["baseline_in12k"] = dict(CONFIGS["baseline"], arch="convnext_tiny.in12k_ft_in1k")
+CONFIGS["baseline_v2"] = dict(CONFIGS["baseline"], arch="convnextv2_tiny.fcmae_ft_in22k_in1k")
+CONFIGS["baseline224"] = dict(CONFIGS["baseline"], res=224)
+CONFIGS["redraw_hdr_hr224"] = dict(CONFIGS["redraw_hdr_hr"], res=224)
 
 
 def mlp(i, h, o, n=2):
@@ -318,8 +334,12 @@ class HypothesisRedrawer(nn.Module):
 class StrokeNet(nn.Module):
     def __init__(self, arch, num_classes=55, in_chans=1, drop_path=0.1, pretrained=True, strokes=True,
                  K=12, d=256, dec_layers=3, head_layers=2, G=48, T=32, hdr=False, hdr_k=3, hdr_M=2,
-                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True):
+                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True, route="coupled"):
         super().__init__()
+        if route not in ("coupled", "honest"):
+            raise ValueError(f"route must be 'coupled' or 'honest', not {route!r}")
+        self.route = route
+        self.input_res = None  # side the cached images are resized to before entering (None: as cached)
         self.backbone = timm.create_model(arch, pretrained=pretrained, num_classes=0, in_chans=in_chans,
                                           drop_path_rate=drop_path)
         self.img_head = nn.Linear(self.backbone.num_features, num_classes)
@@ -353,12 +373,16 @@ class StrokeNet(nn.Module):
             return {"img": logits, "fused": logits, "logits": logits}
         final, inter = self.backbone.forward_intermediates(x, indices=self.taps)
         img_logits = self.img_head(self.backbone.forward_head(final))
-        ctrl, width, exist, mem, mpos = self.decoder(inter)
+        honest = self.route == "honest"
+        ctrl, width, exist, mem, mpos = self.decoder([f.detach() for f in inter] if honest else inter)
         out = {"img": img_logits, "ctrl": ctrl, "width": width, "exist": exist}
         if self.head is not None:
             pts = curve_points(ctrl, self.T)
+            w_in, e_in = width, exist
+            if honest:  # the stroke head reads where the strokes are; it cannot move them
+                pts, w_in, e_in = pts.detach(), width.detach(), exist.detach()
             seen = (pts + jitter * torch.randn_like(pts)).clamp(0, 1) if jitter else pts
-            out["vec"] = self.head(seen, width, exist, inter[0])
+            out["vec"] = self.head(seen, w_in, e_in, inter[0])
             fused = img_logits + out["vec"]
         else:  # strokes only feed the hypothesis check and the reconstruction loss
             fused = img_logits
@@ -410,5 +434,6 @@ def make_model(cfg, num_classes=55, pretrained=None, device="cpu"):
                       strokes=cfg.get("strokes", True), K=cfg.get("K", 12), G=cfg.get("G", 48),
                       hdr=cfg.get("hdr", False), hdr_k=cfg.get("hdr_k", 3), hdr_M=cfg.get("hdr_M", 2),
                       hdr_S=cfg.get("hdr_S", 6), honest=cfg.get("honest", True),
-                      stroke_head=cfg.get("stroke_head", True))
+                      stroke_head=cfg.get("stroke_head", True), route=cfg.get("route", "coupled"))
+    model.input_res = cfg.get("res")
     return model.to(device).to(memory_format=torch.channels_last)

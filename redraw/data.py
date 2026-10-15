@@ -28,6 +28,17 @@ def load_index(split_dir):
     return index, labels, idx
 
 
+def stratified_subset(idx, labels, frac, seed=0):
+    """The same share ``frac`` of every class among ``idx`` (at least one image per class), sorted."""
+    rng = np.random.default_rng(seed)
+    idx = np.asarray(idx)
+    keep = []
+    for c in np.unique(labels[idx]):
+        members = idx[labels[idx] == c]
+        keep.append(rng.choice(members, max(1, int(round(frac * len(members)))), replace=False))
+    return np.sort(np.concatenate(keep))
+
+
 def _run(job):
     fn, path, size = job
     return fn(path, size)

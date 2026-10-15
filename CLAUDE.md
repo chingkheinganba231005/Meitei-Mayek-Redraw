@@ -64,7 +64,7 @@ for "discriminative class models under best-fit alignment". Re-check novelty bef
 
 ## Status (October 2026)
 
-- Code: package `redraw` (26 CPU tests pass). `notebooks/round1.ipynb` trains `redraw`,
+- Code: package `redraw` (39 CPU tests pass, version 0.4.0). `notebooks/round1.ipynb` trains `redraw`,
   `redraw_hdr`, `baseline`, `redraw_norender` (ConvNeXt-T, 40 epochs, validation only).
   `notebooks/round2.ipynb` reuses those and adds `redraw_hdr_sw` (StrokeWarp), `redraw_hdr_e2e`
   (honest-training ablation) and `redraw_hdr_nohead` (no stroke head), with `verify_eval`
@@ -100,6 +100,41 @@ bfloat16 (outside autocast); fixed in 0.3.1 (float32 loss). Comparisons within r
 absolute values may be slightly low. Next: `notebooks/diagnostics.ipynb` (float32 baseline,
 diversity of the eight networks, nearest-neighbour memory with two-fold held-out tuning) to decide
 the next mechanism.
+
+## Diagnostics (validation) and what they mean
+
+- Float32 baseline 97.91%; the average of the eight trained networks 98.01%; some network is right
+  on 98.92%; 117 images are wrong for all eight (74 of them in the four hard pairs).
+- Errors are concentrated in four pairs; I (025) vs I lonsum (044) alone accounts for 76 validation
+  errors and 78 of the 241 test errors of the owner's 98.12% ensemble. The size features carry no
+  information on that pair (the earlier project's size probe equals the majority rate).
+- Nearest neighbours in feature space: median top-1 cosine 0.996 (near-duplicates, same writers);
+  on classifier errors the top-1 neighbour has the true label only 7.5% of the time and median
+  similarity 0.91. A kNN memory adds nothing (held-out gain about 0). The remaining errors are label
+  conflicts the image cannot settle, not missed shape cues.
+- Cover-Hart with the 1-NN error (2.11%): Bayes error in that feature space >= 1.06%, i.e. no
+  classifier on those features exceeds about 98.9% on validation.
+- Every coupled stroke component lowered the network's own image head (redraw 97.73, hdr 97.61 vs
+  97.90): the backbone pays for learning to redraw.
+- The 98.12% models were already trained on train+val (`run_dir/<name>/full`), so retraining on
+  train+val gives no edge over them; the margin must come from stronger single networks.
+
+## Round 3 (validation only, `notebooks/round3.ipynb`, code 0.4.0)
+
+- `route="honest"` (`redraw_hdr_hr`): the stroke decoder and the hypothesis fitter read the backbone
+  through a stop-gradient; the stroke head reads features along the strokes but cannot move them.
+  The backbone learns from classification alone. Together with the honest training of the check this
+  is the paper's learning methodology: every loss reaches only the parts it is meant to explain.
+  Tests in `tests/test_routing.py`.
+- Backbone pilot at 128 px (`baseline_in12k`, `baseline_v2`), then 224 px with the best one
+  (`baseline224`, `redraw_hdr_hr224`; `res` resizes the 128 px cache on the GPU).
+- Test-time redrawing (`train.predict_ttr`): average over the input and n StrokeWarp re-writings
+  made from the network's own parse (fixed draws). Only possible for a network that parses strokes.
+- Diversity (pairwise averages), scarce data (2/5/10%, 2000 steps, baseline vs coupled vs honest),
+  damaged scans (7 corruptions x 2 levels).
+- Plan after round 3: fix the engine (backbone, resolution) and the method on validation; final
+  round = 3 seeds of the method and of the baseline on train+val with that engine, test once;
+  report single-network mean +- s.d., the seed ensemble, McNemar and bootstrap intervals.
 
 ## Data
 

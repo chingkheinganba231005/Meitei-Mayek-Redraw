@@ -8,7 +8,11 @@ losses), ``jitter`` (noise on the stroke samples the stroke head sees) and
 With ``hdr`` the hypothesis check is added (``hdr_fit``, ``hdr_disc``,
 ``hdr_wrong``, ``template_lr``). ``strokewarp`` (a dict, see
 ``strokewarp.STROKEWARP``) deforms part of each batch stroke by stroke along the
-parse of the network's own weight-averaged copy.
+parse of the network's own weight-averaged copy. ``route`` (see ``model.StrokeNet``) decides which
+losses reach which parts. ``res`` resizes the cached images on the GPU before they enter (and before
+augmentation). For the low-data runs, which have hundreds of very short epochs: ``val_every``
+(epochs between validation checks, default 5), ``warmup_steps`` (learning-rate warm-up, default
+3 epochs), ``ckpt_every`` (epochs between checkpoints, default 1) and ``log_every`` (default 1).
 
 The loss is cross-entropy on the combined logits of the two heads, plus
 ``head_weight`` times the cross-entropy of each head on its own, plus
@@ -50,7 +54,7 @@ from .augment import AUG_PRESETS, augment, view
 from .files import must_write, write_file
 from .model import make_model
 from .render import fit_losses, parse_score, render_loss
-from .strokewarp import STROKEWARP, stroke_warp
+from .strokewarp import STROKEWARP, rewrite_noise, stroke_warp
 
 DRIVE_EVERY = 5
 LOCAL = Path(os.environ.get("REDRAW_LOCAL_CKPT", Path(tempfile.gettempdir()) / "redraw_ckpt"))
@@ -119,6 +123,14 @@ def param_groups(model, lr, wd, new_lr=1.0, template_lr=10.0):
             for (kind, decay), ps in groups.items()]
 
 
+def fetch(store, idx, res=None):
+    """Cached ink images (B, 1, H, W) in [0, 1], resized to ``res`` x ``res`` if it differs."""
+    x = store.fetch(idx, "gray")
+    if res and res != x.shape[-1]:
+        x = F.interpolate(x, size=(res, res), mode="bilinear", align_corners=False).clamp_(0, 1)
+    return x
+
+
 def ink_target(x, G):
     """Augmented ink image (B, 1, H, W) in [0, 1] -> the G x G picture the strokes must redraw."""
     return F.interpolate(x[:, :1].float(), size=(G, G), mode="area").squeeze(1)
@@ -155,10 +167,11 @@ def predict(model, idx, cfg, store, views=("id",), bs=512, heads=HEADS):
     """Softmax probabilities of each head, averaged over the test-time views: {head: (N, C)}."""
     model.eval()
     amp = amp_dtype(store.device)
+    res = getattr(model, "input_res", None)
     idx = np.asarray(idx)
     out = {h: [] for h in heads}
     for i in range(0, len(idx), bs):
-        x = store.fetch(idx[i:i + bs], "gray")
+        x = fetch(store, idx[i:i + bs], res)
         acc = {}
         for v in views:
             xv = view(x, v)
@@ -177,10 +190,11 @@ def parse_eval(model, idx, store, bs=256):
     """How well the strokes redraw the characters: mean precision, recall, F and stroke count."""
     model.eval()
     amp = amp_dtype(store.device)
+    res = getattr(model, "input_res", None)
     idx = np.asarray(idx)
     rows = []
     for i in range(0, len(idx), bs):
-        x = store.fetch(idx[i:i + bs], "gray")
+        x = fetch(store, idx[i:i + bs], res)
         with torch.autocast("cuda", dtype=amp, enabled=amp is not None):
             o = model(store.normalize(x, "gray"))
         p, r, f = parse_score(o["render"].float(), ink_target(x, model.G))
@@ -199,11 +213,12 @@ def verify_eval(model, idx, store, labels, bs=512):
     """
     model.eval()
     amp = amp_dtype(store.device)
+    res = getattr(model, "input_res", None)
     idx = np.asarray(idx)
     rows = []
     for i in range(0, len(idx), bs):
         chunk = idx[i:i + bs]
-        x = store.fetch(chunk, "gray")
+        x = fetch(store, chunk, res)
         with torch.autocast("cuda", dtype=amp, enabled=amp is not None):
             o = model(store.normalize(x, "gray"), draw=False, ink=x)
         y = torch.as_tensor(labels[chunk], device=x.device)
@@ -214,6 +229,48 @@ def verify_eval(model, idx, store, labels, bs=512):
     return {"topk_recall": m[:, 0].float().mean().item(), "cost_only": m[:, 1].float().mean().item(),
             "fused": m[:, 2].float().mean().item(), "final": m[:, 3].float().mean().item(),
             "rescued": int((~m[:, 2] & m[:, 3]).sum()), "broken": int((m[:, 2] & ~m[:, 3]).sum())}
+
+
+@torch.no_grad()
+def predict_ttr(model, idx, store, n=4, views=("id",), strength=None, seed=0, bs=256, heads=("logits",)):
+    """Test-time redrawing: softmax averaged over each test-time view and ``n`` re-writings of it.
+
+    A re-writing is StrokeWarp (see ``strokewarp``) applied along the strokes the network itself
+    finds in that view, with fixed random draws (``seed``), so the result is repeatable. ``strength``
+    overrides StrokeWarp's ``bend`` / ``tail``. Only for networks with strokes. Returns {head: (N, C)}.
+    """
+    if not getattr(model, "strokes", False):
+        raise ValueError("test-time redrawing needs a network that parses strokes")
+    sw = dict(STROKEWARP, **(strength or {}))
+    model.eval()
+    amp = amp_dtype(store.device)
+    res = getattr(model, "input_res", None)
+    idx = np.asarray(idx)
+    out = {h: [] for h in heads}
+
+    def run(xv):
+        with torch.autocast("cuda", dtype=amp, enabled=amp is not None):
+            return model(store.normalize(xv, "gray"), draw=False, ink=xv)
+
+    for b, i in enumerate(range(0, len(idx), bs)):
+        x = fetch(store, idx[i:i + bs], res)
+        acc, count = {}, 0
+        for vi, v in enumerate(views):
+            xv = view(x, v)
+            o = run(xv)
+            outs = [o]
+            for r in range(n):
+                g = torch.Generator().manual_seed(((seed * 1009 + b) * 101 + vi) * 101 + r)
+                noise = rewrite_noise(*o["ctrl"].shape[:2], sw["bend"], sw["tail"], g, x.device)
+                outs.append(run(stroke_warp(xv, o["ctrl"], o["exist"], noise=noise, **sw)))
+            for oo in outs:
+                for h in heads:
+                    if h in oo:
+                        acc[h] = acc.get(h, 0) + oo[h].float().softmax(-1)
+            count += len(outs)
+        for h in acc:
+            out[h].append((acc[h] / count).cpu())
+    return {h: torch.cat(v).numpy() for h, v in out.items() if v}
 
 
 def load_model(path, cfg=None, num_classes=55, device="cpu"):
@@ -241,7 +298,10 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
     bs = min(cfg.get("batch", 256), len(train_idx))
     steps_per_epoch = max(1, len(train_idx) // bs)
     total = cfg["epochs"] * steps_per_epoch
-    warm = max(1, min(3 * steps_per_epoch, total // 5))
+    warm = cfg.get("warmup_steps") or max(1, min(3 * steps_per_epoch, total // 5))
+    val_every = cfg.get("val_every", 5)
+    ckpt_every, log_every = cfg.get("ckpt_every", 1), cfg.get("log_every", 1)
+    res = cfg.get("res")
 
     def lr_at(step):
         if step < warm:
@@ -276,7 +336,7 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         perm = train_idx[torch.randperm(len(train_idx), generator=gen).numpy()]
         for i in range(steps_per_epoch):
             idx = perm[i * bs:(i + 1) * bs]
-            x_ink = augment(store.fetch(idx, "gray"), aug)
+            x_ink = augment(fetch(store, idx, res), aug)
             if sw is not None and epoch > sw["warmup"]:
                 with torch.no_grad(), torch.autocast("cuda", dtype=amp, enabled=amp is not None):
                     parse = ema.module(store.normalize(x_ink, "gray"), draw=False)
@@ -298,19 +358,23 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
             step += 1
 
         row = {"epoch": epoch, **{k: v.item() / steps_per_epoch for k, v in sums.items()},
-               "lr": lr_at(step - 1), "sec": round(time.time() - t0)}
-        if val_idx is not None and len(val_idx) and (epoch % 5 == 0 or epoch == cfg["epochs"]):
+               "lr": lr_at(step - 1), "sec": round(time.time() - t0, 1)}
+        if val_idx is not None and len(val_idx) and (epoch % val_every == 0 or epoch == cfg["epochs"]):
             probs = predict(ema.module, val_idx, cfg, store)
             for h, p in probs.items():
                 row[f"val_{h}"] = float((p.argmax(1) == labels[val_idx]).mean())
             if draw:
                 row.update({f"parse_{k}": v for k, v in parse_eval(ema.module, val_idx[:2048], store).items()})
         history.append(row)
-        log(f"{name}/{tag} " + "  ".join(f"{k} {v:.4g}" if isinstance(v, float) else f"{k} {v}" for k, v in row.items()))
+        if epoch % log_every == 0 or epoch in (start, cfg["epochs"]):
+            log(f"{name}/{tag} " + "  ".join(f"{k} {v:.4g}" if isinstance(v, float) else f"{k} {v}"
+                                             for k, v in row.items()))
+        if epoch % ckpt_every and epoch < cfg["epochs"]:
+            continue
         state = {"model": model.state_dict(), "ema": ema.module.state_dict(), "opt": opt.state_dict(),
                  "ema_updates": ema.updates, "epoch": epoch, "step": step, "history": history}
         safe_save(state, local, tries=2)
-        if epoch % DRIVE_EVERY == 0 and epoch < cfg["epochs"]:
+        if epoch % (DRIVE_EVERY * ckpt_every) == 0 and epoch < cfg["epochs"]:
             err = safe_save(state, out_dir / "last.pt")
             if err is not None:
                 log(f"{name}/{tag}: could not copy the checkpoint to {out_dir} ({err}); training goes on")

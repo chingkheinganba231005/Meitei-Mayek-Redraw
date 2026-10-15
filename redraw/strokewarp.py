@@ -33,6 +33,13 @@ from .render import curve_points
 STROKEWARP = dict(p=0.5, warmup=10, bend=0.035, tail=0.2, free=0.06, sigma=0.03, grid=32)
 
 
+def rewrite_noise(B, K, bend, tail, generator=None, device=None):
+    """The random draws of ``bend_strokes`` (inner moves, tail changes), from ``generator`` if given."""
+    inner = torch.randn(B, K, 2, 2, generator=generator) * bend
+    ends = (torch.rand(B, K, 2, generator=generator) * 2 - 1) * tail
+    return inner.to(device), ends.to(device)
+
+
 def bend_strokes(ctrl, exist, bend=0.035, tail=0.2, free=0.06, noise=None):
     """New control points: inner points moved (curvature), free end points moved along the stroke.
 
