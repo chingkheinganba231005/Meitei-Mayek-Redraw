@@ -1,6 +1,6 @@
 [project]
 name = "redraw"
-version = "0.3.0"
+version = "0.3.1"
 description = "Handwritten Meitei Mayek recognition with a network that redraws the characters it reads"
 readme = "README.md"
 license = { text = "MIT" }

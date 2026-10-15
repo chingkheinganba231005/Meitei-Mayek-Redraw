@@ -125,11 +125,13 @@ def ink_target(x, G):
 
 
 def compute_loss(model, out, x_ink, y, crit, cfg):
-    loss = crit(out["fused"], y)
+    # logits come out of the mixed-precision forward pass in bfloat16; the loss must be float32
+    # (rounds 1 and 2 computed it in bfloat16, which only adds gradient noise, the same for every network)
+    loss = crit(out["fused"].float(), y)
     parts = {}
     if "vec" in out:
         hw = cfg.get("head_weight", 0.5)
-        loss = loss + hw * (crit(out["img"], y) + crit(out["vec"], y))
+        loss = loss + hw * (crit(out["img"].float(), y) + crit(out["vec"].float(), y))
     if "render" in out and cfg.get("render_weight", 1.0) > 0:
         with torch.autocast(x_ink.device.type, enabled=False):
             parts = fit_losses(out["render"], out["dist"], out["pts"], out["exist"], ink_target(x_ink, model.G))
@@ -292,7 +294,7 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
             opt.step()
             ema.update(model)
             for k, v in [("loss", loss)] + list(parts.items()):
-                sums[k] = sums.get(k, 0) + v.detach()
+                sums[k] = sums.get(k, 0) + v.detach().float()
             step += 1
 
         row = {"epoch": epoch, **{k: v.item() / steps_per_epoch for k, v in sums.items()},

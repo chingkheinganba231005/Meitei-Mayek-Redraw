@@ -80,6 +80,27 @@ for "discriminative class models under best-fit alignment". Re-check novelty bef
   `redraw` beats `redraw_norender` on validation), then stronger backbone / 60 epochs / 3 seeds,
   test set once, robustness (pen width, blur, low resolution), figures.
 
+## Results so far (validation, 5-view TTA, ConvNeXt-T, 40 epochs, one seed)
+
+| network | val acc | errors | note |
+|---|---|---|---|
+| baseline | 97.90% | 227 | plain fine-tuning |
+| redraw | 97.84% | 234 | parse F 0.93 (recall 0.9998, precision 0.88), ~10 strokes |
+| redraw_norender | 97.98% | 219 | best, but the control without rendering |
+| redraw_hdr | 97.78% | 240 | check: top-3 recall 99.8%, cost alone 93.3%, rescued 1, broken 1 |
+| redraw_hdr_sw | 97.80% | 238 | StrokeWarp: no gain (McNemar 57 vs 55) |
+| redraw_hdr_e2e | 97.87% | 231 | end to end not worse than honest (52 vs 43, p = 0.41); cost alone 91.6% |
+| redraw_hdr_nohead | 97.79% | 239 | rescued 9, broken 10 |
+
+All differences are within noise (McNemar p >= 0.17). Conclusion: unsupervised stroke parsing
+works (a real capability), but neither it, the template check, StrokeWarp nor honest routing adds
+accuracy on this in-distribution benchmark; single networks sit at ~97.9% and 98.12% came from a
+six-network ensemble. Bug found afterwards: rounds 1-2 computed the classification loss in
+bfloat16 (outside autocast); fixed in 0.3.1 (float32 loss). Comparisons within rounds 1-2 are fair,
+absolute values may be slightly low. Next: `notebooks/diagnostics.ipynb` (float32 baseline,
+diversity of the eight networks, nearest-neighbour memory with two-fold held-out tuning) to decide
+the next mechanism.
+
 ## Data
 
 TUMMHCD from its maintainers (http://agnigarh.tezu.ernet.in/~sarat/resources.html). In the owner's

@@ -50,6 +50,8 @@ CONFIGS["redraw_hdr_sw"] = dict(CONFIGS["redraw_hdr"],
                                 strokewarp=dict(p=0.5, warmup=10, bend=0.035, tail=0.2, free=0.06, sigma=0.03))
 # the hypothesis check without the stroke head: the CNN proposes, the redrawing verifies
 CONFIGS["redraw_hdr_nohead"] = dict(CONFIGS["redraw_hdr"], stroke_head=False)
+# the baseline again, with the float32 loss (rounds 1-2 had a bfloat16 loss); new name, new checkpoint
+CONFIGS["baseline_fp32"] = dict(CONFIGS["baseline"])
 
 
 def mlp(i, h, o, n=2):

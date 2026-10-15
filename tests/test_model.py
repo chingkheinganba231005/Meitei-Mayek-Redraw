@@ -67,3 +67,10 @@ def test_without_stroke_head_strokes_still_learn_from_the_ink():
     loss.backward()
     assert set(parts) == {"bce", "prec", "cover", "count"}
     assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.decoder.parameters())
+
+
+def test_loss_is_float32_even_for_bfloat16_logits():
+    y = torch.tensor([0, 1])
+    out = {"fused": torch.randn(2, 5).bfloat16(), "img": torch.randn(2, 5).bfloat16()}
+    loss, _ = compute_loss(None, out, torch.rand(2, 1, 8, 8), y, torch.nn.CrossEntropyLoss(label_smoothing=0.1), {})
+    assert loss.dtype == torch.float32
