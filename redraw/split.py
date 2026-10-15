@@ -112,6 +112,63 @@ def make_split(zip_path, data_dir, val_ratio=0.15, seed=42):
     return split_dir, summary
 
 
+def _natural(name):
+    """Sort key that puts character_2 before character_10."""
+    import re
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
+
+
+def _class_folders(d):
+    return [c for c in Path(d).iterdir() if c.is_dir() and any(
+        x.is_file() and x.suffix.lower() in IMAGE_EXTS for x in c.iterdir())]
+
+
+def make_split_folders(zip_path, data_dir, val_ratio=0.15, seed=42):
+    """The same split files for any archive with a train and a test folder (any case) of class folders.
+
+    Labels follow the natural order of the training class folders; their names are kept in
+    ``classes.json``. Validation is carved out of train as for TUMMHCD.
+    """
+    data_dir = Path(data_dir)
+    extract(zip_path, data_dir / "raw")
+    dirs = [p for p in (data_dir / "raw").rglob("*") if p.is_dir()]
+    train_dirs = [p for p in dirs if p.name.lower() == "train" and _class_folders(p)]
+    test_dirs = [p for p in dirs if p.name.lower() == "test" and _class_folders(p)]
+    if not train_dirs or not test_dirs:
+        raise SystemExit(f"could not find train and test folders of class folders under {data_dir / 'raw'}")
+    train_dir, test_dir = train_dirs[0], test_dirs[0]
+    names = sorted((c.name for c in _class_folders(train_dir)), key=_natural)
+    label_of = {n: i for i, n in enumerate(names)}
+    split_dir = data_dir / "splits"
+    split_dir.mkdir(parents=True, exist_ok=True)
+
+    def rows_of(root):
+        rows = []
+        for folder in sorted(_class_folders(root), key=lambda c: _natural(c.name)):
+            if folder.name not in label_of:
+                raise SystemExit(f"test class {folder.name} has no training folder")
+            for img in sorted(x for x in folder.iterdir() if x.is_file() and x.suffix.lower() in IMAGE_EXTS):
+                rows.append({"path": os.path.relpath(img, split_dir), "label": label_of[folder.name],
+                             "class_name": folder.name, "source_folder": folder.name})
+        return rows
+
+    train_rows, test_rows = rows_of(train_dir), rows_of(test_dir)
+    rng = random.Random(seed)
+    train, val = [], []
+    for label in range(len(names)):
+        rows = [r for r in train_rows if r["label"] == label]
+        rng.shuffle(rows)
+        n_val = max(1, int(len(rows) * val_ratio))
+        val += rows[:n_val]
+        train += rows[n_val:]
+    for name, rows in (("train", train), ("val", val), ("test", test_rows)):
+        pd.DataFrame(rows).to_csv(split_dir / f"{name}.csv", index=False)
+    (split_dir / "classes.json").write_text(json.dumps(names, indent=1))
+    summary = {"classes": len(names), "train": len(train), "val": len(val), "test": len(test_rows)}
+    (split_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    return split_dir, summary
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data-dir", default="data")

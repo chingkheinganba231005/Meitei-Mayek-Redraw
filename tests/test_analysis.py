@@ -50,3 +50,33 @@ def test_familiarity_finds_the_near_duplicate():
 def test_accuracy_by_bin():
     out = accuracy_by_bin([1, 0, 1, 1], [0, 0, 1, 1])
     assert out == {0: (0.5, 2), 1: (1.0, 2)}
+
+
+def test_risk_coverage_orders_by_confidence():
+    from redraw.analysis import rank_average, risk_at, risk_coverage
+    score = np.array([0.9, 0.8, 0.7, 0.1])
+    correct = np.array([True, True, True, False])
+    cov, risk, aurc = risk_coverage(score, correct)
+    assert risk.tolist() == [0, 0, 0, 0.25] and cov[-1] == 1 and abs(aurc - 0.0625) < 1e-9
+    assert risk_at(score, correct, 0.75) == 0 and risk_at(score, correct, 1.0) == 0.25
+    assert risk_coverage(-score, correct)[2] > aurc  # the wrong order is worse
+    assert rank_average([1, 2, 3], [3, 2, 1]).tolist() == [2, 2, 2]
+
+
+def test_split_from_class_folders(tmp_path):
+    import json
+    import zipfile
+
+    import cv2
+
+    from helpers import glyph
+    from redraw.split import make_split_folders
+    with zipfile.ZipFile(tmp_path / "d.zip", "w") as z:
+        for split, n in (("Train", 10), ("Test", 3)):
+            for name in ("character_10_x", "character_2_y", "digit_0"):
+                for i in range(n):
+                    ok, buf = cv2.imencode(".png", 255 - glyph(i))
+                    z.writestr(f"Data/{split}/{name}/{i}.png", buf.tobytes())
+    split_dir, summary = make_split_folders(tmp_path / "d.zip", tmp_path / "data")
+    assert summary == {"classes": 3, "train": 27, "val": 3, "test": 9}
+    assert json.loads((split_dir / "classes.json").read_text()) == ["character_2_y", "character_10_x", "digit_0"]

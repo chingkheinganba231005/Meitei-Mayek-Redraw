@@ -128,3 +128,15 @@ def test_sparse_checkpoints_and_logs_still_resume(setup, monkeypatch):
     assert [m.split()[2] for m in logged[1:]] == ["3", "5"]  # the first epoch of this session, and the last
     history = torch.load(tmp_path / "work" / "runs" / "sparse" / "dev" / "final.pt", weights_only=False)["history"]
     assert [h["epoch"] for h in history] == [1, 2, 3, 4, 5]
+
+
+def test_check_outputs(setup):
+    tmp_path, store, labels, idx = setup
+    torch.manual_seed(0)
+    model = make_model(dict(arch="resnet18", drop_path=0.0, pretrained=False, strokes=True, K=4, hdr=True,
+                            hdr_k=3, route="honest"), 55)
+    out = T.check_outputs(model, idx["val"], store)
+    n = len(idx["val"])
+    assert out["cand"].shape == (n, 3) and out["energy"].shape == (n, 3) and out["probs"].shape == (n, 55)
+    assert (out["pred"] == out["probs"].argmax(1)).all()
+    assert all(p in c for p, c in zip(out["pred"], out["cand"]))  # the answer is always a candidate

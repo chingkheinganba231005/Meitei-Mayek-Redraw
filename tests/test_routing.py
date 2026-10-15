@@ -78,3 +78,23 @@ def test_unknown_route_is_refused():
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+def test_draw_grad_dial_scales_the_drawing_gradient_into_the_backbone():
+    x = torch.rand(2, 1, 64, 64)
+    grads = {}
+    for g in (0.0, 0.25, 1.0):
+        model = _model("honest", draw_grad=g)
+        reconstruction(model, x).backward()
+        grads[g] = torch.cat([p.grad.flatten() if p.grad is not None else torch.zeros(p.numel())
+                              for p in model.backbone.parameters()])
+    assert grads[0.0].abs().sum() == 0 and grads[1.0].abs().sum() > 0
+    assert torch.allclose(grads[0.25], 0.25 * grads[1.0], rtol=1e-4, atol=1e-8)
+
+
+def test_draw_grad_needs_honest_routing():
+    try:
+        make_model(dict(TINY, route="coupled", draw_grad=0.5), 5)
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")

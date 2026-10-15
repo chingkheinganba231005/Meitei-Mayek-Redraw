@@ -51,3 +51,12 @@ def test_parse_score():
     assert p.item() == 1 and r.item() == 1 and f.item() > 0.99
     empty = torch.zeros_like(img)
     assert parse_score(empty, (img > 0.5).float())[2].item() == 0
+
+
+
+def test_light_ink_on_dark_paper_is_read_like_dark_ink_on_light_paper(make_glyph):
+    import numpy as np
+    from redraw.preprocess import preprocess
+    g = make_glyph(1, size=32, thickness=2)
+    a, b = preprocess(g, 64)[0].astype(float), preprocess(255 - g, 64)[0].astype(float)
+    assert np.abs(a - b).mean() < 3 and a.mean() > 10  # same normalised ink, not an empty image

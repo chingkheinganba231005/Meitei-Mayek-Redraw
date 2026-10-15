@@ -38,6 +38,7 @@ small set of pen strokes and classifies those strokes too.
 | `notebooks/diagnostics.ipynb` | float32 baseline, diversity of the trained networks, nearest-neighbour memory |
 | `notebooks/round3.ipynb` | honest routing, backbone and 224 px pilot, test-time redrawing, scarce data, damaged scans |
 | `notebooks/final.ipynb` | final run: 3 seeds of the method and of the control on train+val, the test set once, familiarity, damaged scans, scarce data |
+| `notebooks/extras.ipynb` | for reviewers: learned templates, vector redrawing and SVG export, selective prediction, erasing strokes (is the explanation faithful?), the routing dial, a second script (Devanagari) |
 | `redraw/analysis.py` | paired tests, bootstrap intervals, pairwise averages |
 | `tests/` | CPU tests (`python -m pytest`) |
 

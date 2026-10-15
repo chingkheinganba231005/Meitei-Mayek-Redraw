@@ -21,7 +21,9 @@ every part, so the reconstruction losses also reshape the backbone, and the stro
 strokes to wherever helps it classify. "honest": the stroke decoder and the hypothesis fitter read the
 backbone's feature maps through a stop-gradient, so drawing never changes what the recogniser sees;
 the stroke head reads features where the strokes are but cannot move them, so the parse stays an
-explanation of the ink. The backbone then learns from classification alone.
+explanation of the ink. The backbone then learns from classification alone. ``draw_grad`` (honest
+routing only, default 0) lets that fraction of the drawing gradient back into the backbone: a dial
+between honest (0) and coupled (1) for the backbone, while the stroke head still cannot move strokes.
 """
 
 import math
@@ -68,6 +70,9 @@ CONFIGS["baseline_in12k"] = dict(CONFIGS["baseline"], arch="convnext_tiny.in12k_
 CONFIGS["baseline_v2"] = dict(CONFIGS["baseline"], arch="convnextv2_tiny.fcmae_ft_in22k_in1k")
 CONFIGS["baseline224"] = dict(CONFIGS["baseline"], res=224)
 CONFIGS["redraw_hdr_hr224"] = dict(CONFIGS["redraw_hdr_hr"], res=224)
+# the routing dial: a quarter of, or all of, the drawing gradient reaches the backbone
+CONFIGS["redraw_hdr_hr_g25"] = dict(CONFIGS["redraw_hdr_hr"], draw_grad=0.25)
+CONFIGS["redraw_hdr_hr_g100"] = dict(CONFIGS["redraw_hdr_hr"], draw_grad=1.0)
 
 
 def mlp(i, h, o, n=2):
@@ -334,11 +339,13 @@ class HypothesisRedrawer(nn.Module):
 class StrokeNet(nn.Module):
     def __init__(self, arch, num_classes=55, in_chans=1, drop_path=0.1, pretrained=True, strokes=True,
                  K=12, d=256, dec_layers=3, head_layers=2, G=48, T=32, hdr=False, hdr_k=3, hdr_M=2,
-                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True, route="coupled"):
+                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True, route="coupled", draw_grad=0.0):
         super().__init__()
         if route not in ("coupled", "honest"):
             raise ValueError(f"route must be 'coupled' or 'honest', not {route!r}")
-        self.route = route
+        if not 0.0 <= draw_grad <= 1.0 or (draw_grad and route != "honest"):
+            raise ValueError("draw_grad must be in [0, 1] and is only used with honest routing")
+        self.route, self.draw_grad = route, draw_grad
         self.input_res = None  # side the cached images are resized to before entering (None: as cached)
         self.backbone = timm.create_model(arch, pretrained=pretrained, num_classes=0, in_chans=in_chans,
                                           drop_path_rate=drop_path)
@@ -374,7 +381,12 @@ class StrokeNet(nn.Module):
         final, inter = self.backbone.forward_intermediates(x, indices=self.taps)
         img_logits = self.img_head(self.backbone.forward_head(final))
         honest = self.route == "honest"
-        ctrl, width, exist, mem, mpos = self.decoder([f.detach() for f in inter] if honest else inter)
+        if honest:  # the decoder sees the features; only a fraction draw_grad of its gradient goes back
+            g = self.draw_grad
+            seen_by_decoder = [f.detach() + g * (f - f.detach()) if g else f.detach() for f in inter]
+        else:
+            seen_by_decoder = inter
+        ctrl, width, exist, mem, mpos = self.decoder(seen_by_decoder)
         out = {"img": img_logits, "ctrl": ctrl, "width": width, "exist": exist}
         if self.head is not None:
             pts = curve_points(ctrl, self.T)
@@ -434,6 +446,7 @@ def make_model(cfg, num_classes=55, pretrained=None, device="cpu"):
                       strokes=cfg.get("strokes", True), K=cfg.get("K", 12), G=cfg.get("G", 48),
                       hdr=cfg.get("hdr", False), hdr_k=cfg.get("hdr_k", 3), hdr_M=cfg.get("hdr_M", 2),
                       hdr_S=cfg.get("hdr_S", 6), honest=cfg.get("honest", True),
-                      stroke_head=cfg.get("stroke_head", True), route=cfg.get("route", "coupled"))
+                      stroke_head=cfg.get("stroke_head", True), route=cfg.get("route", "coupled"),
+                      draw_grad=cfg.get("draw_grad", 0.0))
     model.input_res = cfg.get("res")
     return model.to(device).to(memory_format=torch.channels_last)

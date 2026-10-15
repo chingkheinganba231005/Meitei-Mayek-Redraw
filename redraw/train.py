@@ -273,6 +273,26 @@ def predict_ttr(model, idx, store, n=4, views=("id",), strength=None, seed=0, bs
     return {h: torch.cat(v).numpy() for h, v in out.items() if v}
 
 
+@torch.no_grad()
+def check_outputs(model, idx, store, bs=512):
+    """Per image (one view): the candidates of the hypothesis check, their energies (lower explains the
+    ink better), the final class and the softmax of the final logits. Numpy arrays."""
+    model.eval()
+    amp = amp_dtype(store.device)
+    res = getattr(model, "input_res", None)
+    idx = np.asarray(idx)
+    out = {"cand": [], "energy": [], "pred": [], "probs": []}
+    for i in range(0, len(idx), bs):
+        x = fetch(store, idx[i:i + bs], res)
+        with torch.autocast("cuda", dtype=amp, enabled=amp is not None):
+            o = model(store.normalize(x, "gray"), draw=False, ink=x)
+        out["cand"].append(o["cand"].cpu())
+        out["energy"].append(o["cost"].float().cpu())
+        out["pred"].append(o["logits"].float().argmax(1).cpu())
+        out["probs"].append(o["logits"].float().softmax(-1).cpu())
+    return {k: torch.cat(v).numpy() for k, v in out.items()}
+
+
 def load_model(path, cfg=None, num_classes=55, device="cpu"):
     ck = torch.load(path, map_location=device, weights_only=False)
     cfg = cfg or ck["cfg"]

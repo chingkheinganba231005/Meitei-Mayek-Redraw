@@ -64,7 +64,7 @@ for "discriminative class models under best-fit alignment". Re-check novelty bef
 
 ## Status (October 2026)
 
-- Code: package `redraw` (41 CPU tests pass, version 0.4.0). `notebooks/round1.ipynb` trains `redraw`,
+- Code: package `redraw` (52 CPU tests pass, version 0.5.0). `notebooks/round1.ipynb` trains `redraw`,
   `redraw_hdr`, `baseline`, `redraw_norender` (ConvNeXt-T, 40 epochs, validation only).
   `notebooks/round2.ipynb` reuses those and adds `redraw_hdr_sw` (StrokeWarp), `redraw_hdr_e2e`
   (honest-training ablation) and `redraw_hdr_nohead` (no stroke head), with `verify_eval`
@@ -179,6 +179,48 @@ hard pairs, parse, check, test-time redrawing; accuracy by familiarity (most sim
 image on 32 x 32 thumbnails, `analysis.familiarity`; bins: least familiar 5%, 5-10%, 10-25%,
 rest), also on validation for the round-3 networks; damaged scans on test; scarce data with seeds
 1-2 added and all three evaluated on test.
+
+## Final results (test set, 12,794 images, 5-view TTA; `MyDrive/redraw/final/results.json`)
+
+| network | singles (3 seeds) | mean +- s.d. | seed average | errors |
+|---|---|---|---|---|
+| control (`baseline_fp32`) | 97.76 / 97.83 / 97.90 | 97.83 +- 0.07 | 97.88 (CI 97.63-98.13) | 271 |
+| ours (`redraw_hdr_hr`) | 97.90 / 97.94 / 97.83 | 97.89 +- 0.06 | 97.94 (CI 97.69-98.18) | 264 |
+| coupled (`redraw_hdr`, 1 seed) | 97.84 | | | 276 |
+
+- McNemar ours vs control per seed: 82/64 (p 0.16), 82/68 (0.29), 53/62 (0.46). Over 12 paired runs
+  (3 full + 9 scarce-data) ours ahead in 10, mean +0.08 points, Wilcoxon p = 0.007 (conditional on
+  the test set). 98.12% (earlier six-network ensemble) is NOT beaten; the paper does not claim it.
+- Ours: image head 97.76; stroke reader 97.29-97.55; parse F 0.930-0.931 (P 0.878, R 0.9999), ~9.7
+  strokes; check: top-3 recall 99.84%, energy alone 93.6%, rescued 11 / broken 14 over 3 seeds;
+  test-time redrawing no gain. Cost: 35.6 M vs 27.9 M parameters, 3.70 vs 2.90 GFLOPs, 3.1x training.
+- Scarce data (test, 3 seeds): 2% 94.06/94.14/94.14 (control/coupled/ours), 5% 95.34/95.35/95.45,
+  10% 95.99/96.00/96.08.
+- Damaged scans (stronger level, vs control): coupled +3.05 blur, +2.77 at 12 px, +1.02 at 16 px,
+  -1.70 noise, -2.60 salt and pepper, -5.45 uneven light; ours same signs, smaller. Mean over 14
+  conditions: 94.11 / 94.01 / 93.97 (control / ours / coupled).
+- Errors: four pairs = 54-59% of every network's errors (1,802 test images); 130 test images wrong
+  for all 7; pixel nearest neighbour 86.6% (52.7% on the least familiar 5%), networks flat 97.3-98.0%.
+
+## Paper (draft, not in the repository)
+
+"Reading by redrawing: stroke-level explanations for handwritten Meitei Mayek recognition at no cost
+in accuracy", Springer sn-jnl, 22 pages, built from the results files only (figures by
+`make_figs.py`). Claims: a mechanism (unsupervised Bezier parse + template check), a training
+principle (honest gradient routing), a shape-bias dial, and an error analysis; no claim to beat
+98.12%. The earlier paper is cited as under review and must be declared in the cover letter.
+
+## Round 5 (`notebooks/extras.ipynb`, code 0.5.0), for reviewers
+
+A: TUMMHCD final networks, inference only: learned templates of all 55 classes, vector redrawing +
+SVG export, selective prediction (softmax vs energy margin vs rank average; AURC, risk at 90/95/98%).
+A4 (`redraw/erase.py`): erase one stroke of each test image (pixels nearest that stroke's edge, within
+0.04) chosen by the stroke reader (most / least important: leave-one-out drop of the reader's
+log-probability of the final class), at random, the largest, or by gradient x input of the reading
+network; ours and the control read every erased image; seeds paired.
+B: routing dial `draw_grad` 0.25 and 1.0 (`redraw_hdr_hr_g25`, `_g100`), full data, test + damaged
+scans. C: Devanagari (DHCD, UCI, 46 classes), recipe unchanged: control x3, ours x3, coupled x1,
+test once, damaged scans, 2/5% x3 seeds, parses and templates. Results go to `MyDrive/redraw/extras/`.
 
 ## Data
 

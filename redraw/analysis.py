@@ -67,3 +67,29 @@ def accuracy_by_bin(ok, bins):
     """Accuracy of a boolean "right" vector within each bin of an integer bin vector: {bin: (accuracy, n)}."""
     ok, bins = np.asarray(ok, bool), np.asarray(bins)
     return {int(b): (float(ok[bins == b].mean()), int((bins == b).sum())) for b in np.unique(bins)}
+
+
+def risk_coverage(score, correct):
+    """Selective prediction: keep the images with the highest ``score`` first.
+
+    Returns (coverage, risk, aurc): for k = 1..N kept images, the share kept and the error rate among
+    them, and the area under that curve (lower is better).
+    """
+    score, correct = np.asarray(score, float), np.asarray(correct, bool)
+    order = np.argsort(-score, kind="stable")
+    errors = np.cumsum(~correct[order])
+    k = np.arange(1, len(score) + 1)
+    coverage, risk = k / len(score), errors / k
+    return coverage, risk, float(risk.mean())
+
+
+def risk_at(score, correct, coverage):
+    """Error rate among the ``coverage`` share of images with the highest score."""
+    cov, risk, _ = risk_coverage(score, correct)
+    return float(risk[min(len(risk) - 1, max(0, int(np.ceil(coverage * len(risk))) - 1))])
+
+
+def rank_average(*scores):
+    """Average of the ranks of several scores (higher is more confident), without any fitted weight."""
+    from scipy.stats import rankdata
+    return np.mean([rankdata(np.asarray(s, float)) for s in scores], 0)
