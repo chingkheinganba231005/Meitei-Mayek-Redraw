@@ -1,7 +1,7 @@
 """Unpack TUMMHCD and write the train / validation / test split as CSV files.
 
     python -m redraw.split --zip TUMMHCD-TEST-TRAIN.zip --data-dir data
-    python -m redraw.split --data-dir data          # download first
+    python -m redraw.split --data-dir data          # download first (about 55 MB)
 
 The archive only has train and test folders. Validation is carved out of
 train: 15% of every class, shuffled with seed 42. This gives 61,504 / 10,826 /
@@ -14,15 +14,15 @@ import json
 import os
 import random
 import shutil
-import ssl
-import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 
 import pandas as pd
 
-URL = "https://agnigarh.tezu.ernet.in/~sarat/TUMMHCD-TEST-TRAIN.zip"
+# a copy of the official archive (TUMMHCD-TEST-TRAIN.zip); the original university page is offline
+DRIVE_ID = "1aUc15b-LAgJCExAx5C8E3-tCqQdtkaS7"
+URL = f"https://drive.usercontent.google.com/download?id={DRIVE_ID}&export=download&confirm=t"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".pgm"}
 
 
@@ -30,15 +30,7 @@ def download(url, dest):
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    try:
-        r = urllib.request.urlopen(req, timeout=300)
-    except urllib.error.URLError as e:
-        if not isinstance(e.reason, ssl.SSLError):
-            raise
-        # the university server's certificate has been broken before
-        print(f"certificate check failed for {url} ({e.reason}); downloading without it")
-        r = urllib.request.urlopen(req, context=ssl._create_unverified_context(), timeout=300)
-    with r, open(dest, "wb") as f:
+    with urllib.request.urlopen(req, timeout=300) as r, open(dest, "wb") as f:
         shutil.copyfileobj(r, f)
     if not zipfile.is_zipfile(dest):
         dest.unlink()

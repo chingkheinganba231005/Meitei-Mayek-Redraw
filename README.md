@@ -1,52 +1,188 @@
-# Reading by redrawing: handwritten Meitei Mayek recognition
+# Reading by redrawing
 
-Work in progress. A recogniser for the 55 classes of handwritten Meitei Mayek
-in TUMMHCD that, besides classifying the image, redraws the character as a
-small set of pen strokes and classifies those strokes too.
+**Unsupervised stroke parsing and honest gradient routing for handwritten Meitei Mayek recognition**
 
-- A pretrained CNN reads the image (the **image head**).
-- A **stroke decoder** reads the CNN's feature maps and predicts up to K
-  strokes, each a cubic Bezier curve with a width and an existence
-  probability.
-- A differentiable **renderer** draws the strokes, and the drawing is
-  compared with the input. That comparison is the only thing that teaches the
-  decoder what a stroke is: there are no stroke labels and no online
-  (pen-trajectory) data for Meitei Mayek.
-- A **stroke head** turns each stroke into a token (its shape, its size
-  relative to the glyph, and the CNN features along it) and classifies the
-  set of strokes with a small transformer.
-- The output adds the logits of the two heads.
-- A **hypothesis check** then redraws the image as each of the top 3 candidate
-  classes, starting from that class's learned stroke templates, and re-ranks
-  the candidates by how well each redrawing explains the image. The fitter that
-  bends the templates is only ever trained to fit as well as it can; only the
-  templates learn to tell classes apart, so the redrawing costs stay honest evidence.
-- **StrokeWarp** deforms training images stroke by stroke along the network's
-  own parse: strokes bend, free tails grow or shrink, joints and pen width stay.
+Most handwriting recognisers name a character and stop there. This project builds a recogniser
+for the 55 classes of handwritten Meitei Mayek that also redraws what it reads. Alongside its
+prediction it returns the character as a small set of cubic Bézier pen strokes, learned without a
+single stroke label, and it checks its leading guesses by bending learned stroke templates of each
+candidate class onto the image. The code here produced every number and figure in the
+accompanying paper (under review).
 
-## Layout
+![Overview of the recogniser](docs/figures/overview.png)
 
-| Path | What |
+## How it works
+
+**Stroke decoder and renderer.** A pretrained ConvNeXt-T reads the image. A stroke decoder with
+12 learned queries attends to its stride-8 and stride-16 feature maps and predicts up to 12
+strokes, each a cubic Bézier curve with a width and an existence probability. A differentiable
+renderer draws the strokes from their distance field, and the drawing is compared with the input
+ink. That comparison is the only thing that teaches the decoder what a stroke is: there are no
+stroke labels and no online (pen-trajectory) data for Meitei Mayek.
+
+**Stroke reader.** Every stroke becomes a token: its shape, its width relative to the character
+box (which also carries the size the character was written at), and the backbone features sampled
+along it. A small set transformer classifies the set of tokens, and its logits are added to those
+of the ordinary image classifier.
+
+**Hypothesis check.** Every class owns two templates of eight strokes, learned from the training
+images. For the three best candidates, a fitter predicts how to bend each template onto the image
+(an affine map plus a bounded offset for every control point). The bent template is rendered and
+scored by how well it explains the ink and how far it had to bend. The scores re-rank the
+candidates, and the parse and the bent templates are returned with every decision.
+
+**Honest gradient routing.** Trained end to end, these parts cost the recogniser accuracy: the
+drawing loss pulls the shared backbone away from what classification needs, and the classifier
+moves the strokes to wherever they help it, so they stop describing the ink. Honest routing lets
+each loss reach only the parts it is meant to explain:
+
+| loss | what it may train |
 |---|---|
-| `redraw/render.py` | stroke rendering, reconstruction losses, parse score |
-| `redraw/model.py` | the network and the experiment configurations |
-| `redraw/train.py` | training loop (EMA, resumable checkpoints), prediction, parse evaluation |
-| `redraw/split.py`, `preprocess.py`, `data.py`, `augment.py` | data split, preprocessing, GPU augmentation |
-| `redraw/strokewarp.py` | StrokeWarp |
-| `notebooks/round1.ipynb` | first experiment: the method (with and without the hypothesis check) vs. plain fine-tuning vs. strokes never compared with the ink |
-| `notebooks/round2.ipynb` | second experiment: StrokeWarp, honest vs. end-to-end training, the check without the stroke head |
-| `notebooks/diagnostics.ipynb` | float32 baseline, diversity of the trained networks, nearest-neighbour memory |
-| `notebooks/round3.ipynb` | honest routing, backbone and 224 px pilot, test-time redrawing, scarce data, damaged scans |
-| `notebooks/final.ipynb` | final run: 3 seeds of the method and of the control on train+val, the test set once, familiarity, damaged scans, scarce data |
-| `notebooks/extras.ipynb` | for reviewers: learned templates, vector redrawing and SVG export, selective prediction, erasing strokes (is the explanation faithful?), the routing dial, a second script (Devanagari) |
-| `redraw/analysis.py` | paired tests, bootstrap intervals, pairwise averages |
-| `tests/` | CPU tests (`python -m pytest`) |
+| classification | backbone, image classifier and stroke reader, but never the strokes themselves |
+| drawing | the stroke decoder only, which reads the backbone through a stop-gradient |
+| template fit | the fitter, which learns to fit every hypothesis as well as it can, right or wrong |
+| template margin and discrimination | the templates (and two scalars), with the fitter frozen |
 
-## Data
+In code this is `route="honest"` in `redraw/model.py`. `route="coupled"` is the ablation in which
+every loss reaches every part, and `draw_grad` lets a chosen fraction of the drawing gradient back
+into the backbone.
 
-TUMMHCD from its maintainers (http://agnigarh.tezu.ernet.in/~sarat/resources.html).
-Validation is 15% of each training class, seed 42 (61,504 / 10,826 / 12,794 images).
+## Results
+
+TUMMHCD test set, 12,794 images. Every design decision was made on a validation split held out
+from the training images; the final networks were trained with three seeds on all 72,330
+training images, and the test set was predicted once.
+
+| method | accuracy (%) |
+|---|---|
+| HOG + SVM (Hijam, 2024) | 93.98 |
+| EfficientNet-B3, transfer learning (Hijam, 2024) | 95.21 |
+| compact CNN (Hijam and Saharia, 2022) | 95.56 |
+| multilevel feature fusion (Hijam and Saharia, 2024) | 97.08 |
+| ConvNeXt-T, same recipe without strokes (control) | 97.83 ± 0.07 |
+| redrawing, coupled routing (one seed) | 97.84 |
+| **redrawing, honest routing** | **97.89 ± 0.06** |
+| **honest routing, average of the three seeds** | **97.94** |
+
+- The recogniser redraws test characters with about ten strokes and a parse F-score of 0.93
+  against the ink, without ever seeing a stroke label.
+- It beats the control in 10 of 12 paired runs with full and reduced training data (mean
+  +0.08 points, Wilcoxon p = 0.007). The gain is small because most of the remaining errors are
+  look-alike pairs whose labels the image cannot settle: four pairs cause 54-59% of all errors.
+- Routing controls the shape bias of the backbone. When the drawing loss reaches the backbone,
+  the recogniser gains 3.1 points under heavy blur and 2.8 at 12-pixel resolution, and loses 5.5
+  under strongly uneven lighting.
+
+![Parses and the hypothesis check on the four confusable pairs](docs/figures/parses.png)
+
+![Change in accuracy against the control on damaged scans](docs/figures/robustness.png)
+
+![Accuracy with reduced and full training data](docs/figures/scarce_data.png)
+
+The numbers behind every table and figure are in [`results/`](results/).
+
+## Dataset
+
+The experiments use the Tezpur University Meitei Mayek Handwritten Character Database (TUMMHCD),
+introduced by Hijam and Saharia in
+[*The Visual Computer* 38, 525-539 (2022)](https://link.springer.com/article/10.1007/s00371-020-02032-y):
+85,124 images of isolated characters in 55 classes, with an official split of 72,330 training and
+12,794 test images. The original download page is offline. A copy of the official archive
+(`TUMMHCD-TEST-TRAIN.zip`, 55 MB) is available on
+[Google Drive](https://drive.google.com/file/d/1aUc15b-LAgJCExAx5C8E3-tCqQdtkaS7/view), and the
+code downloads it from there when no local copy is found.
+
+Validation is 15% of every training class, shuffled with seed 42, which gives 61,504 / 10,826 /
+12,794 training, validation and test images:
+
+```bash
+python -m redraw.split --data-dir data                                  # download and split
+python -m redraw.split --zip TUMMHCD-TEST-TRAIN.zip --data-dir data     # or use a local copy
+```
+
+## Reproducing the experiments
+
+The experiments were run in Google Colab, in the order below. Each notebook keeps its trained
+networks and predictions on Google Drive, so after a disconnect it can simply be run again.
+
+| notebook | what it does |
+|---|---|
+| [`round1`](notebooks/round1.ipynb) | the method with and without the hypothesis check, the plain network, and strokes that are never compared with the ink |
+| [`round2`](notebooks/round2.ipynb) | StrokeWarp (training images deformed along their own parse), end-to-end versus honest check training, the check without the stroke reader |
+| [`diagnostics`](notebooks/diagnostics.ipynb) | float32 control, how much the networks disagree, a nearest-neighbour memory |
+| [`round3`](notebooks/round3.ipynb) | honest routing, other pretrainings and 224 px input, test-time redrawing, reduced data, damaged scans (validation only) |
+| [`final`](notebooks/final.ipynb) | final networks on training + validation, the test set once, familiarity analysis, damaged scans, reduced data |
+| [`extras`](notebooks/extras.ipynb) | learned templates of all classes, vector (SVG) redrawing, selective prediction, stroke erasure, the routing dial, a second script (Devanagari) |
+
+Open a notebook in Colab with
+`https://colab.research.google.com/github/chingkheinganba231005/Meitei-Mayek-Redraw/blob/main/notebooks/<name>.ipynb`
+and choose a large GPU runtime; the final networks were trained on a G4 runtime (one NVIDIA RTX
+PRO 6000 Blackwell). On the development split, one network of the method trained in about 35
+minutes and the control in about 11.
+
+## Using the code
+
+```bash
+pip install -r requirements.txt
+python -m pytest            # CPU tests, about a minute
+```
+
+```python
+from redraw.data import Store, build_cache, load_index
+from redraw.model import CONFIGS
+from redraw.split import make_split
+from redraw.train import predict, train
+
+splits, _ = make_split("TUMMHCD-TEST-TRAIN.zip", "data")
+index, labels, idx = load_index(splits)
+store = Store(build_cache(index.file.tolist(), 128, "cache"), "cuda", idx["train"])
+cfg = dict(CONFIGS["redraw_hdr_hr"], seed=0)          # the method with honest routing
+model = train("redraw_hdr_hr", cfg, idx["train"], "s0", store, labels, "work", val_idx=idx["val"])
+probs = predict(model, idx["test"], cfg, store)["logits"]
+```
+
+## Repository layout
+
+| path | contents |
+|---|---|
+| `redraw/model.py` | the network, honest and coupled routing, and every configuration used in the paper |
+| `redraw/render.py` | differentiable stroke rendering, the drawing losses and the parse score |
+| `redraw/train.py` | training loop (weight averaging, resumable checkpoints), prediction, parse and check evaluation |
+| `redraw/strokewarp.py` | StrokeWarp and test-time redrawing |
+| `redraw/erase.py` | the stroke-erasure test of the explanations |
+| `redraw/analysis.py` | McNemar tests, bootstrap intervals, familiarity, risk-coverage curves |
+| `redraw/split.py`, `preprocess.py`, `data.py`, `augment.py`, `robustness.py` | data split, preprocessing, GPU augmentation and synthetic damage |
+| `notebooks/` | the experiments, as notebooks and as plain Python scripts |
+| `results/` | the results files written by the notebooks |
+| `tests/` | CPU tests |
+
+## Citation
+
+```bibtex
+@misc{rajkumar2026redraw,
+  author = {Rajkumar, Chingkheinganba},
+  title  = {Reading by redrawing: unsupervised stroke parsing and honest gradient routing
+            for handwritten {Meitei Mayek} recognition},
+  year   = {2026},
+  note   = {Manuscript under review. Code: https://github.com/chingkheinganba231005/Meitei-Mayek-Redraw}
+}
+```
+
+Please also cite the dataset:
+
+```bibtex
+@article{hijam2022database,
+  author  = {Hijam, Deena and Saharia, Sarat},
+  title   = {On developing complete character set {Meitei Mayek} handwritten character database},
+  journal = {The Visual Computer},
+  volume  = {38},
+  pages   = {525--539},
+  year    = {2022},
+  doi     = {10.1007/s00371-020-02032-y}
+}
+```
 
 ## Licence
 
-MIT.
+MIT, see [LICENSE](LICENSE). TUMMHCD belongs to its creators; please follow their terms when using
+it.

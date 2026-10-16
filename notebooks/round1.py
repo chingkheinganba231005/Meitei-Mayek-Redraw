@@ -12,17 +12,16 @@
 # | `baseline` | the plain fine-tuned network |
 # | `redraw_norender` | `redraw`, but its strokes are never compared with the ink (are the gains from redrawing, or just from extra layers?) |
 #
-# About 3 to 3.5 hours on an A100. Every model is saved to Google Drive, so after
+# About 3 to 3.5 hours on a large Colab GPU. Every model is saved to Google Drive, so after
 # a disconnect just run all cells again: finished models are reused and an
 # interrupted one continues from its last checkpoint. (If you already ran an
 # earlier version of this notebook, its finished models are reused too.)
 #
-# **Before running.** Runtime → Change runtime type → **A100 GPU**. The dataset
-# zip (`TUMMHCD-TEST-TRAIN.zip`) is found automatically if it is anywhere in the
-# top three folder levels of your Drive (for example in `tummhcd98` from the
-# first project). The code comes from `redraw_code.zip` at the top level of My
-# Drive, or from the GitHub repository once it exists (a private repository
-# needs a Colab secret `GH_TOKEN`, key icon on the left; it is never printed).
+# **Before running.** Runtime → Change runtime type → a large GPU (A100, H100 or G4).
+# The dataset zip (`TUMMHCD-TEST-TRAIN.zip`) is found automatically if it is
+# anywhere in the top three folder levels of your Drive; otherwise it is
+# downloaded. The code is cloned from the GitHub repository (or taken from
+# `redraw_code.zip` at the top level of My Drive, if present).
 
 # %%
 import os
@@ -142,8 +141,8 @@ def pct(x):
 # %% [markdown]
 # ## 1. Data
 #
-# Same split as the first project: 15% of every training class for validation,
-# seed 42, giving 61,504 / 10,826 / 12,794 images.
+# 15% of every training class is held out for validation (seed 42), giving
+# 61,504 / 10,826 / 12,794 images.
 
 # %%
 ZIP = Path(os.environ.get("ZIP", WORK / "TUMMHCD-TEST-TRAIN.zip"))

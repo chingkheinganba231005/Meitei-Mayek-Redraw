@@ -1,12 +1,11 @@
 # %% [markdown]
-# # Round 5: the evidence demanding reviewers will ask for
+# # Additional experiments: templates, faithfulness, the routing dial and a second script
 #
-# The final run fixed the main result on TUMMHCD. This notebook adds what a reviewer of a
-# visual-computing journal is likely to ask for. It does not touch the TUMMHCD test protocol:
-# sections A and B use the test set exactly as the final run did, and C uses a second dataset with
+# These experiments extend the final run without changing its test protocol: sections A and B
+# use the TUMMHCD test set exactly as the final run did, and section C uses a second dataset with
 # the recipe unchanged (nothing is tuned on it).
 #
-# | | what | A100 time |
+# | | what | GPU time |
 # |---|---|---|
 # | A | TUMMHCD, the final networks, no training: the learned stroke templates of all 55 classes; characters redrawn as vector graphics (also saved as SVG); selective prediction (does the check's evidence tell when the recogniser is wrong?); erasing strokes (does the stroke the explanation names decide what the networks read?) | 30 min |
 # | B | TUMMHCD, the routing dial: a quarter of, and all of, the drawing gradient let into the backbone (one seed each, training + validation), test set and damaged scans | 1 h 40 min |
@@ -768,9 +767,9 @@ if RUN_DHCD:
 # %% [markdown]
 # ## Summary
 #
-# Send `MyDrive/redraw/extras/results.json` back, with the figures (`templates_all.pdf`,
-# `vector_redraw.pdf`, `erase.pdf`, `erase_examples.png`, `dial.pdf`, `dhcd_parses.png`,
-# `dhcd_templates.pdf`).
+# All numbers are in `MyDrive/redraw/extras/results.json`, with the figures next to it
+# (`templates_all.pdf`, `vector_redraw.pdf`, `erase.pdf`, `erase_examples.png`, `dial.pdf`,
+# `dhcd_parses.png`, `dhcd_templates.pdf`).
 
 # %%
 print("results:", RESULTS)

@@ -19,7 +19,7 @@
 #    scored on the other half (and the other way round), so the gain is not
 #    tuned on the images it is measured on.
 #
-# About 15 minutes on an A100 in total. Results go to `MyDrive/redraw/diagnostics/`.
+# About 15 minutes on a large Colab GPU in total. Results go to `MyDrive/redraw/diagnostics/`.
 
 # %%
 import os

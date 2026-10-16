@@ -1,5 +1,5 @@
 # %% [markdown]
-# # Reading by redrawing, round 3: honest routing, a stronger engine, and what the parse is for
+# # Reading by redrawing, round 3: honest routing, backbone and resolution, and uses of the parse
 #
 # What rounds 1-2 and the diagnostics showed (validation, one seed each):
 #
@@ -12,7 +12,7 @@
 #
 # Round 3 asks seven questions, all on the **validation split only** (the test set stays untouched):
 #
-# | | question | new runs | A100 time |
+# | | question | new runs | GPU time |
 # |---|---|---|---|
 # | A | Does **honest routing** remove that cost? Drawing never changes what the recogniser sees, and reading never moves the strokes | `redraw_hdr_hr` | 30 min |
 # | B | Is another ConvNeXt-T pretraining better here (ImageNet-12k, or ConvNeXt V2)? | `baseline_in12k`, `baseline_v2` | 25 min |
@@ -595,7 +595,7 @@ if RUN_LOW_DATA and R["low_data"]:
 # %% [markdown]
 # ## Summary
 #
-# Everything above in one place. Send `results.json` (and the figures, if you like) back.
+# Everything above in one place; the numbers are in `results.json`, with the figures next to it.
 
 # %%
 print("all networks (validation, 5-view TTA):")

@@ -11,7 +11,7 @@
 # - the control: `baseline_fp32`, the same backbone and recipe without any of it;
 # - the shape-bias ablation: `redraw_hdr`, the method with coupled routing.
 #
-# | | what | A100 time |
+# | | what | GPU time |
 # |---|---|---|
 # | 1 | train 3 seeds of the method, 3 of the control and 1 of the coupled model on training + validation (72,330 images) | 3 h 20 min |
 # | 2 | test set: single networks (mean and s.d. over seeds), seed averages, paired tests, intervals, hard pairs, parse, check, test-time redrawing | 25 min |
@@ -131,7 +131,6 @@ SEEDS = (0, 1, 2)
 FAMILIES = {"baseline_fp32": "plain fine-tuning", "redraw_hdr_hr": "redrawing, honest routing (the method)",
             "redraw_hdr": "redrawing, coupled routing"}
 FINAL = [("baseline_fp32", s) for s in SEEDS] + [("redraw_hdr_hr", s) for s in SEEDS] + [("redraw_hdr", 0)]
-BAR_ERRORS = 241   # errors of the earlier six-network average (98.12%) on the same 12,794 test images
 MILD = dict(bend=0.02, tail=0.1)
 
 
@@ -286,8 +285,7 @@ R["wrong_by_all"] = {"count": int((n_wrong == len(OK)).sum()),
                                   for a, b in PAIRS}}
 save()
 
-if len(te) == 12794:
-    print(f"test images: {len(te)}; the earlier six-network average made {BAR_ERRORS} errors ({pct(1 - BAR_ERRORS / len(te))})\n")
+print(f"test images: {len(te)}\n")
 for family, label in FAMILIES.items():
     sm = summary[family]
     sd = f" +- {100 * sm['single_sd']:.2f}" if sm["single_sd"] is not None else ""
@@ -586,7 +584,7 @@ del model
 # %% [markdown]
 # ## Summary
 #
-# Send `MyDrive/redraw/final/results.json` back (the figures too, if you like).
+# All numbers are in `MyDrive/redraw/final/results.json`, with the figures next to it.
 
 # %%
 print("TEST SET (12,794 images), 5-view test-time augmentation")
@@ -596,6 +594,4 @@ for fam_, label in FAMILIES.items():
     print(f"  {label}: single {pct(sm['single_mean'])}{sd}; average of seeds {pct(sm['average'])} "
           f"({sm['average_errors']} errors)")
 print(f"  all seven: {pct(summary['all_seven']['average'])} ({summary['all_seven']['average_errors']} errors)")
-if len(te) == 12794:
-    print(f"  earlier six-network average: {pct(1 - BAR_ERRORS / len(te))} ({BAR_ERRORS} errors)")
 print("results:", RESULTS)

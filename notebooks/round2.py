@@ -11,7 +11,7 @@
 # | `redraw_hdr_e2e` | does honest training matter? The same network trained end to end, so the fitter may learn to fit wrong classes badly and every template learns from every class |
 # | `redraw_hdr_nohead` | does the stroke head earn its place? The CNN proposes and the redrawing verifies, nothing else |
 #
-# About 4 hours on an A100 for the three new networks (if time is short, the
+# About 4 hours on a large Colab GPU for the three new networks (if time is short, the
 # first two matter most; remove `redraw_hdr_nohead` from `NEW` to skip it).
 # Finished models are reused after a disconnect: just run all cells again.
 
