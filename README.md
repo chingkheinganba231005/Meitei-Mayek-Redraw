@@ -120,8 +120,8 @@ networks and predictions on Google Drive, so after a disconnect it can simply be
 Open a notebook in Colab with
 `https://colab.research.google.com/github/chingkheinganba231005/Meitei-Mayek-Redraw/blob/main/notebooks/<name>.ipynb`
 and choose a large GPU runtime; the final networks were trained on a G4 runtime (one NVIDIA RTX
-PRO 6000 Blackwell). In round 3, one network of the method trained in about 35 minutes on the
-development split and the control in about 11.
+PRO 6000 Blackwell); the development rounds ran on an NVIDIA A100 (80 GB), where one network of the
+method trained in about 35 minutes on the development split and the control in about 11.
 
 ### Further experiments
 

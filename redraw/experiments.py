@@ -1491,6 +1491,24 @@ def per_image_table(ctx):
     return df
 
 
+def release_predictions(ctx):
+    """Final-output probabilities of every final network on the test set (one and five views), float16, with
+    the test-set row index, for the public results archive (the paper's seed averages can be recomputed)."""
+    out = ctx.out / "per_image" / "probabilities"
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for name in FINAL.values():
+        for s in range(5):
+            for view in ("test_id", "test_tta"):
+                p = saved_preds(ctx, f"{name}_full_s{s}", view)
+                if p is not None:
+                    f = out / f"{name}_full_s{s}_{view}.npz"
+                    np.savez_compressed(f, index=ctx.idx["test"], label=ctx.labels[ctx.idx["test"]],
+                                        probabilities=p["logits"].astype(np.float16))
+                    written.append(f.name)
+    return written
+
+
 EXPECTED = ("audit", "bench", "core", "probes", "extra_seeds", "recon", "stability", "interventions", "checker",
             "coupled_seeds", "robustness", "dial", "figures", "dhcd/second_dataset")
 
@@ -1500,6 +1518,7 @@ def export(ctx):
     ``revision/exports`` (checkpoints stay on Drive; their hashes are in runs.csv)."""
     run_table(ctx)
     per_image_table(ctx)
+    release_predictions(ctx)
     status = {name: ("present" if ctx.path(name).exists() else "missing") for name in EXPECTED}
     write_json(ctx.out / "status.json", {"files": status, "environment": environment(REPO_ROOT),
                                          "missing": [k for k, v in status.items() if v == "missing"]})
@@ -1507,7 +1526,8 @@ def export(ctx):
         "Results of the revision experiments (redraw.experiments). JSON: one file per experiment; the docstrings\n"
         "of redraw/experiments.py say what each holds. *.npz: per-image arrays; 'index' is the row in\n"
         "data/splits (train, val, test in that order). runs.csv: every trained network with its checkpoint hash.\n"
-        "per_image/test_predictions.csv: classes read by every final network. manifest.json: data and split\n"
+        "per_image/test_predictions.csv: classes read by every final network; per_image/probabilities: their\n"
+        "final-output probabilities (float16) with the test-set row index. manifest.json: data and split\n"
         "hashes and the environment of every session. status.json: experiments not yet run.\n")
     stamp = time.strftime("%Y%m%d_%H%M")
     zp = ctx.out / "exports" / f"revision_results_{stamp}.zip"
