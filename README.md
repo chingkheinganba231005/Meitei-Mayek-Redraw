@@ -1,6 +1,6 @@
 # Reading by redrawing
 
-**Unsupervised stroke parsing and honest gradient routing for handwritten Meitei Mayek recognition**
+**Stroke reconstruction and honest gradient routing for handwritten Meitei Mayek recognition**
 
 Most handwriting recognisers name a character and stop there. This project builds a recogniser
 for the 55 classes of handwritten Meitei Mayek that also redraws what it reads. Alongside its
@@ -21,7 +21,7 @@ ink. That comparison is the only thing that teaches the decoder what a stroke is
 stroke labels and no online (pen-trajectory) data for Meitei Mayek.
 
 **Stroke reader.** Every stroke becomes a token: its shape, its width relative to the character
-box (which also carries the size the character was written at), and the backbone features sampled
+box (which may carry a cue to the size the character was written at), and the backbone features sampled
 along it. A small set transformer classifies the set of tokens, and its logits are added to those
 of the ordinary image classifier.
 
@@ -64,14 +64,18 @@ training images, and the test set was predicted once.
 | **redrawing, honest routing** | **97.89 ± 0.06** |
 | **honest routing, average of the three seeds** | **97.94** |
 
-- The recogniser redraws test characters with about ten strokes and a parse F-score of 0.93
-  against the ink, without ever seeing a stroke label.
-- It beats the control in 10 of 12 paired runs with full and reduced training data (mean
-  +0.08 points, Wilcoxon p = 0.007). The gain is small because most of the remaining errors are
-  look-alike pairs whose labels the image cannot settle: four pairs cause 54-59% of all errors.
-- Routing controls the shape bias of the backbone. When the drawing loss reaches the backbone,
-  the recogniser gains 3.1 points under heavy blur and 2.8 at 12-pixel resolution, and loses 5.5
-  under strongly uneven lighting.
+- The recogniser redraws test characters with about ten strokes and a rendered-ink F-score of
+  0.93, without ever seeing a stroke label. This measures agreement with the ink, not with the
+  writer's pen strokes.
+- It is ahead of the control in 10 of 12 paired runs with full and reduced training data (mean
+  +0.08 points, exact Wilcoxon p = 0.008, conditional on this test set). Most of its margin over
+  earlier published results comes from the backbone and recipe it shares with the control, and
+  four look-alike pairs cause 54-59% of the remaining errors.
+- The hypothesis check does not add accuracy (11 errors fixed, 14 introduced over three seeds);
+  what it adds is the display of bent templates.
+- Letting the drawing loss reach the backbone changes which corruptions hurt: +3.1 points under
+  heavy blur and +2.8 at 12-pixel resolution, -5.5 under strongly uneven lighting, with a similar
+  mean over all corruptions.
 
 ![Parses and the hypothesis check on the four confusable pairs](docs/figures/parses.png)
 
@@ -173,6 +177,7 @@ probs = predict(model, idx["test"], cfg, store)["logits"]
 | `redraw/analysis.py`, `stats.py` | McNemar tests, bootstrap intervals, paired comparisons across seeds, familiarity, risk-coverage curves |
 | `redraw/bench.py`, `manifest.py` | cost measurements; hashes, environment records and result archives |
 | `redraw/experiments.py` | the further experiments, one function each |
+| `redraw/paper_numbers.py` | every number of the paper recomputed from the results files |
 | `redraw/split.py`, `preprocess.py`, `data.py`, `augment.py`, `robustness.py` | data split, preprocessing, GPU augmentation and synthetic damage |
 | `notebooks/` | the experiments, as notebooks and as plain Python scripts |
 | `results/` | the results files written by the notebooks |
@@ -183,7 +188,7 @@ probs = predict(model, idx["test"], cfg, store)["logits"]
 ```bibtex
 @misc{rajkumar2026redraw,
   author = {Rajkumar, Chingkheinganba},
-  title  = {Reading by redrawing: unsupervised stroke parsing and honest gradient routing
+  title  = {Reading by redrawing: stroke reconstruction and honest gradient routing
             for handwritten {Meitei Mayek} recognition},
   year   = {2026},
   note   = {Manuscript under review. Code: https://github.com/chingkheinganba231005/Meitei-Mayek-Redraw}
