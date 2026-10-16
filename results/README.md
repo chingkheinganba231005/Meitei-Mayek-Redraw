@@ -12,3 +12,8 @@ by the notebooks):
 | `final.json` | `notebooks/final.ipynb` | test (predicted once) |
 
 Accuracies are fractions, not percentages.
+
+`paper_numbers.json` holds every number of the paper that comes from these files, recomputed by
+`python -m redraw.paper_numbers` (paired comparisons across training runs with the exact signed-rank
+test, ties handled). The further experiments (`notebooks/rev*`) write their results to
+`MyDrive/redraw/revision`; copies of their result archives go in `results/revision/`.

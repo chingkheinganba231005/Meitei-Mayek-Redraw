@@ -24,6 +24,14 @@ the stroke head reads features where the strokes are but cannot move them, so th
 explanation of the ink. The backbone then learns from classification alone. ``draw_grad`` (honest
 routing only, default 0) lets that fraction of the drawing gradient back into the backbone: a dial
 between honest (0) and coupled (1) for the backbone, while the stroke head still cannot move strokes.
+``reader_moves_strokes`` lets the stroke head's loss move the strokes under honest routing; with
+``draw_grad`` it gives the four corners of the routing factorial (coupled = 1 and True).
+
+Controls for what the stroke head uses: ``reader_inputs`` ("both", "geometry": shape tokens only,
+"features": backbone features sampled along the curves only) and ``reader_curves`` ("parse", or
+"grid": a fixed grid of straight curves, the same for every image, so the head is an ordinary
+feature-pooling head). ``frozen_backbone`` keeps the backbone and image classifier fixed (they are
+loaded from a trained control): the classifier-first, decoder-second baseline.
 """
 
 import math
@@ -73,6 +81,31 @@ CONFIGS["redraw_hdr_hr224"] = dict(CONFIGS["redraw_hdr_hr"], res=224)
 # the routing dial: a quarter of, or all of, the drawing gradient reaches the backbone
 CONFIGS["redraw_hdr_hr_g25"] = dict(CONFIGS["redraw_hdr_hr"], draw_grad=0.25)
 CONFIGS["redraw_hdr_hr_g100"] = dict(CONFIGS["redraw_hdr_hr"], draw_grad=1.0)
+CONFIGS["redraw_hdr_hr_g50"] = dict(CONFIGS["redraw_hdr_hr"], draw_grad=0.5)
+
+# revision experiments: the check switched off to isolate the two routing rules (factorial), what the
+# stroke head reads, and simpler alternatives. All use the float32 loss and a matched augmentation stream.
+_NOCHECK = dict(CONFIGS["redraw"], route="honest", matched_aug=True)
+CONFIGS["control_m"] = dict(CONFIGS["baseline"], matched_aug=True)
+CONFIGS["rt_none"] = dict(_NOCHECK, draw_grad=1.0, reader_moves_strokes=True)      # = coupled
+CONFIGS["rt_backbone"] = dict(_NOCHECK, draw_grad=0.0, reader_moves_strokes=True)  # drawing kept out of backbone
+CONFIGS["rt_geometry"] = dict(_NOCHECK, draw_grad=1.0, reader_moves_strokes=False) # reading cannot move strokes
+CONFIGS["rt_both"] = dict(_NOCHECK, draw_grad=0.0, reader_moves_strokes=False)     # both rules (honest)
+CONFIGS["rd_geometry"] = dict(CONFIGS["rt_both"], reader_inputs="geometry")
+CONFIGS["rd_features"] = dict(CONFIGS["rt_both"], reader_inputs="features")
+CONFIGS["rd_grid"] = dict(CONFIGS["rt_both"], reader_curves="grid")
+CONFIGS["rd_free"] = dict(CONFIGS["redraw_norender"], matched_aug=True)            # slots, no rendering loss
+CONFIGS["sequential"] = dict(CONFIGS["rt_both"], frozen_backbone=True)            # needs init_from
+
+
+def grid_curves(K):
+    """K straight cubic curves on a fixed grid (half horizontal, half vertical), (K, 4, 2) in [0, 1]."""
+    n_h = (K + 1) // 2
+    n_v = K - n_h
+    t = torch.tensor([0.1, 0.1 + 0.8 / 3, 0.1 + 1.6 / 3, 0.9])
+    rows = [torch.stack([t, torch.full((4,), (i + 0.5) / n_h)], -1) for i in range(n_h)]
+    cols = [torch.stack([torch.full((4,), (i + 0.5) / max(n_v, 1)), t], -1) for i in range(n_v)]
+    return torch.stack(rows + cols)
 
 
 def mlp(i, h, o, n=2):
@@ -185,8 +218,11 @@ class StrokeDecoder(nn.Module):
 class StrokeHead(nn.Module):
     """Classifier over the set of strokes. It sees neither stroke order nor which query made a stroke."""
 
-    def __init__(self, feat_ch, num_classes, d=256, layers=2, heads=8, T=32):
+    def __init__(self, feat_ch, num_classes, d=256, layers=2, heads=8, T=32, inputs="both"):
         super().__init__()
+        if inputs not in ("both", "geometry", "features"):
+            raise ValueError(f"reader_inputs must be 'both', 'geometry' or 'features', not {inputs!r}")
+        self.inputs = inputs
         self.geo = mlp(2 * T + 4, d, d)
         self.app = nn.Conv2d(feat_ch, d, 1)
         self.cls = nn.Parameter(torch.zeros(1, 1, d))
@@ -203,7 +239,13 @@ class StrokeHead(nn.Module):
         a = self.app(fmap)
         app = F.grid_sample(a, (pts.reshape(B, K * T, 1, 2) * 2 - 1).to(a.dtype), mode="bilinear",
                             align_corners=False).view(B, -1, K, T).mean(-1).transpose(1, 2)
-        x = torch.cat([self.cls.expand(B, -1, -1).to(app.dtype), self.geo(geo.to(app.dtype)) + app], 1)
+        if self.inputs == "geometry":
+            tok = self.geo(geo.to(app.dtype))
+        elif self.inputs == "features":
+            tok = app
+        else:
+            tok = self.geo(geo.to(app.dtype)) + app
+        x = torch.cat([self.cls.expand(B, -1, -1).to(app.dtype), tok], 1)
         bias = torch.cat([torch.zeros(B, 1, device=x.device), torch.log(exist.clamp_min(1e-4))], 1)
         for blk in self.blocks:
             x = blk(x, bias=bias)
@@ -339,13 +381,20 @@ class HypothesisRedrawer(nn.Module):
 class StrokeNet(nn.Module):
     def __init__(self, arch, num_classes=55, in_chans=1, drop_path=0.1, pretrained=True, strokes=True,
                  K=12, d=256, dec_layers=3, head_layers=2, G=48, T=32, hdr=False, hdr_k=3, hdr_M=2,
-                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True, route="coupled", draw_grad=0.0):
+                 hdr_S=6, hdr_G=32, honest=True, stroke_head=True, route="coupled", draw_grad=0.0,
+                 reader_moves_strokes=None, reader_inputs="both", reader_curves="parse", frozen_backbone=False):
         super().__init__()
         if route not in ("coupled", "honest"):
             raise ValueError(f"route must be 'coupled' or 'honest', not {route!r}")
         if not 0.0 <= draw_grad <= 1.0 or (draw_grad and route != "honest"):
             raise ValueError("draw_grad must be in [0, 1] and is only used with honest routing")
+        if reader_moves_strokes is not None and route != "honest":
+            raise ValueError("reader_moves_strokes is only used with honest routing (coupled always moves them)")
+        if reader_curves not in ("parse", "grid"):
+            raise ValueError(f"reader_curves must be 'parse' or 'grid', not {reader_curves!r}")
         self.route, self.draw_grad = route, draw_grad
+        self.reader_moves_strokes = route == "coupled" if reader_moves_strokes is None else bool(reader_moves_strokes)
+        self.reader_curves, self.frozen_backbone = reader_curves, frozen_backbone
         self.input_res = None  # side the cached images are resized to before entering (None: as cached)
         self.backbone = timm.create_model(arch, pretrained=pretrained, num_classes=0, in_chans=in_chans,
                                           drop_path_rate=drop_path)
@@ -357,12 +406,27 @@ class StrokeNet(nn.Module):
             self.taps = [next(i for i, f in enumerate(info) if f["reduction"] == r) for r in (8, 16)]
             chs = [info[i]["num_chs"] for i in self.taps]
             self.decoder = StrokeDecoder(chs, d=d, K=K, layers=dec_layers)
-            self.head = StrokeHead(chs[0], num_classes, d=d, layers=head_layers, T=T) if stroke_head else None
+            self.head = (StrokeHead(chs[0], num_classes, d=d, layers=head_layers, T=T, inputs=reader_inputs)
+                         if stroke_head else None)
+            self.register_buffer("grid_ctrl", grid_curves(K), persistent=False)
             if hdr:
                 self.hdr = HypothesisRedrawer(num_classes, d=d, M=hdr_M, S=hdr_S)
                 self.hdr_k, self.hdr_G, self.honest = hdr_k, hdr_G, honest
                 self.beta = nn.Parameter(torch.tensor(math.log(math.expm1(5.0))))   # softplus -> 5
                 self.gamma = nn.Parameter(torch.tensor(math.log(math.expm1(1.0))))  # softplus -> 1
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.frozen_backbone:  # a fixed feature extractor: no dropout or stochastic depth
+            self.backbone.eval()
+        return self
+
+    def freeze_backbone(self):
+        """Backbone and image classifier fixed (after loading them from a trained control)."""
+        for p in list(self.backbone.parameters()) + list(self.img_head.parameters()):
+            p.requires_grad_(False)
+        self.frozen_backbone = True
+        return self.train(self.training)
 
     def new_parameters(self):
         """Parameters that start from scratch (they get a higher learning rate)."""
@@ -389,10 +453,17 @@ class StrokeNet(nn.Module):
         ctrl, width, exist, mem, mpos = self.decoder(seen_by_decoder)
         out = {"img": img_logits, "ctrl": ctrl, "width": width, "exist": exist}
         if self.head is not None:
-            pts = curve_points(ctrl, self.T)
-            w_in, e_in = width, exist
-            if honest:  # the stroke head reads where the strokes are; it cannot move them
-                pts, w_in, e_in = pts.detach(), width.detach(), exist.detach()
+            if self.reader_curves == "grid":  # the same straight curves for every image
+                B = ctrl.shape[0]
+                g = self.grid_ctrl.to(ctrl.dtype).unsqueeze(0).expand(B, -1, -1, -1)
+                pts = curve_points(g, self.T)
+                w_in = torch.full(width.shape, 0.06, device=width.device, dtype=width.dtype)
+                e_in = torch.ones_like(exist)
+            else:
+                pts = curve_points(ctrl, self.T)
+                w_in, e_in = width, exist
+                if not self.reader_moves_strokes:  # the stroke head reads where the strokes are; it cannot move them
+                    pts, w_in, e_in = pts.detach(), width.detach(), exist.detach()
             seen = (pts + jitter * torch.randn_like(pts)).clamp(0, 1) if jitter else pts
             out["vec"] = self.head(seen, w_in, e_in, inter[0])
             fused = img_logits + out["vec"]
@@ -447,6 +518,8 @@ def make_model(cfg, num_classes=55, pretrained=None, device="cpu"):
                       hdr=cfg.get("hdr", False), hdr_k=cfg.get("hdr_k", 3), hdr_M=cfg.get("hdr_M", 2),
                       hdr_S=cfg.get("hdr_S", 6), honest=cfg.get("honest", True),
                       stroke_head=cfg.get("stroke_head", True), route=cfg.get("route", "coupled"),
-                      draw_grad=cfg.get("draw_grad", 0.0))
+                      draw_grad=cfg.get("draw_grad", 0.0), reader_moves_strokes=cfg.get("reader_moves_strokes"),
+                      reader_inputs=cfg.get("reader_inputs", "both"), reader_curves=cfg.get("reader_curves", "parse"),
+                      frozen_backbone=cfg.get("frozen_backbone", False))
     model.input_res = cfg.get("res")
     return model.to(device).to(memory_format=torch.channels_last)
