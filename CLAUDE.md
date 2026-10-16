@@ -204,13 +204,16 @@ rest), also on validation for the round-3 networks; damaged scans on test; scarc
 
 ## Paper (draft v1, not in the repository)
 
-"Reading by redrawing: stroke-level explanations for handwritten Meitei Mayek recognition at no cost
-in accuracy", Springer sn-jnl, 23 pages, built from the results files only (figures by
+"Reading by redrawing: unsupervised stroke parsing and honest gradient routing for handwritten Meitei
+Mayek recognition", Springer sn-jnl, 23 pages, built from the results files only (figures by
 `make_figs.py`); Algorithm 1 gives one training step with the stop-gradients. Claims: a mechanism
 (unsupervised Bezier parse + template check), a training principle (honest gradient routing; cites
 Cloud et al. 2024 "gradient routing" and concept-bottleneck leakage as related), a shape-bias dial, and
-an error analysis; no claim to beat 98.12%. The earlier paper is cited as under review; the cover
-letter declares it and its earlier desk rejection at The Visual Computer. Paired tests are stated as
+an error analysis. Accuracy is stated as "above every published result" (never "first"); the
+no-stroke control stays in the paper. The earlier manuscript is not cited (TVC: unpublished works
+may not be in the reference list); the cover letter mentions a separate manuscript on the same
+dataset under consideration elsewhere, without numbers. If it is published first, cite it and
+drop "above every published result". Paired tests are stated as
 conditional on the shared test set. v2 will add the round-5 results (erasure test, Devanagari, dial,
 selective prediction, template and vector figures).
 
