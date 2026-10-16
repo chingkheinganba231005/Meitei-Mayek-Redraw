@@ -5,6 +5,10 @@ stroke models: ``K`` (strokes), ``render_weight`` (0 = strokes are never
 compared with the ink), ``head_weight`` (weight of the two separate head
 losses), ``jitter`` (noise on the stroke samples the stroke head sees) and
 ``new_lr`` (learning-rate multiplier for the parts that start from scratch).
+``matched_aug`` draws the augmentation from its own random stream (seeded by ``seed`` and the epoch),
+so networks of different architectures trained with the same seed see the same augmented images in
+the same order. ``init_from`` (a checkpoint of a trained control) loads the backbone and the image
+classifier before training; with ``frozen_backbone`` they stay fixed.
 With ``hdr`` the hypothesis check is added (``hdr_fit``, ``hdr_disc``,
 ``hdr_wrong``, ``template_lr``). ``strokewarp`` (a dict, see
 ``strokewarp.STROKEWARP``) deforms part of each batch stroke by stroke along the
@@ -34,7 +38,11 @@ different parts on purpose:
   that turn costs into logits, on the images the two heads get wrong or nearly wrong.
 
 Checkpoints: the resumable state is written to local disk after every epoch
-and copied to ``work`` (e.g. Google Drive) every ``DRIVE_EVERY`` epochs.
+and copied to ``work`` (e.g. Google Drive) every ``DRIVE_EVERY`` epochs. It holds the weights, the
+weight average, the optimiser, the step count and the random state, and training resumes at the next
+epoch; the data order and the matched augmentation stream are seeded per epoch, so they are the same
+as without the interruption (GPU kernels are not bitwise deterministic, so the weights may differ in
+the last digits). A finished run (``final.pt``) is reused only with the same settings.
 """
 
 import copy
@@ -108,10 +116,12 @@ class EMA:
 
 def param_groups(model, lr, wd, new_lr=1.0, template_lr=10.0):
     """Backbone at the base rate; new parts at ``new_lr`` times it; the class templates (a few
-    thousand numbers) at ``template_lr`` times it and without weight decay."""
+    thousand numbers) at ``template_lr`` times it and without weight decay. Frozen parameters are left out."""
     new = {id(p) for p in model.new_parameters()}
     groups = {}
     for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
         if name in TEMPLATES:
             key = ("template", False)
         else:
@@ -121,6 +131,31 @@ def param_groups(model, lr, wd, new_lr=1.0, template_lr=10.0):
     scale = {"backbone": 1.0, "new": new_lr, "template": template_lr}
     return [{"params": ps, "weight_decay": wd if decay else 0.0, "lr_scale": scale[kind]}
             for (kind, decay), ps in groups.items()]
+
+
+def load_backbone(model, path, device="cpu"):
+    """Copy the backbone and image classifier of a trained network (its weight-averaged copy) into ``model``."""
+    state = torch.load(path, map_location=device, weights_only=False)["model"]
+    keep = {k: v for k, v in state.items() if k.startswith(("backbone.", "img_head."))}
+    if not keep:
+        raise ValueError(f"{path} has no backbone weights")
+    missing = [k for k in model.state_dict() if k.startswith(("backbone.", "img_head.")) and k not in keep]
+    if missing:
+        raise ValueError(f"{path} does not match the backbone of this model ({len(missing)} tensors missing)")
+    model.load_state_dict(keep, strict=False)
+    return model
+
+
+def run_meta(device, **extra):
+    """Where and with what a run was trained or evaluated (kept with checkpoints and results)."""
+    import platform
+
+    import timm
+    meta = {"device": torch.cuda.get_device_name(0) if device == "cuda" else platform.processor() or "cpu",
+            "torch": torch.__version__, "timm": timm.__version__, "python": platform.python_version(),
+            "cuda": torch.version.cuda, "time": time.strftime("%Y-%m-%d %H:%M:%S")}
+    meta.update(extra)
+    return meta
 
 
 def fetch(store, idx, res=None):
@@ -293,8 +328,20 @@ def check_outputs(model, idx, store, bs=512):
     return {k: torch.cat(v).numpy() for k, v in out.items()}
 
 
-def load_model(path, cfg=None, num_classes=55, device="cpu"):
+def cfg_conflicts(saved, wanted):
+    """Settings that differ between a finished run and the run asked for (keys present in both)."""
+    saved, wanted = saved or {}, wanted or {}
+    return {k: (saved[k], wanted[k]) for k in sorted(set(saved) & set(wanted)) if saved[k] != wanted[k]}
+
+
+def load_model(path, cfg=None, num_classes=55, device="cpu", check_cfg=False):
+    """The weight-averaged network saved in ``path``. With ``check_cfg``, refuse a checkpoint whose saved
+    settings differ from ``cfg`` (a finished run is never silently reused for a different experiment)."""
     ck = torch.load(path, map_location=device, weights_only=False)
+    if check_cfg and cfg is not None:
+        conflicts = cfg_conflicts(ck.get("cfg"), cfg)
+        if conflicts:
+            raise ValueError(f"{path} was trained with other settings {conflicts}; use another tag or remove that run")
     cfg = cfg or ck["cfg"]
     model = make_model(cfg, num_classes, pretrained=False, device=device)
     model.load_state_dict(ck["model"])
@@ -307,7 +354,7 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
     out_dir = Path(work) / "runs" / name / tag
     out_dir.mkdir(parents=True, exist_ok=True)
     if (out_dir / "final.pt").exists():
-        return load_model(out_dir / "final.pt", cfg, num_classes, device)
+        return load_model(out_dir / "final.pt", cfg, num_classes, device, check_cfg=True)
 
     seed = cfg.get("seed", 0)
     torch.manual_seed(seed)
@@ -330,6 +377,12 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         return cfg["lr"] * (0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * t)))
 
     model = make_model(cfg, num_classes, device=device)
+    if cfg.get("init_from"):
+        load_backbone(model, cfg["init_from"], device)
+    if cfg.get("frozen_backbone"):
+        if not cfg.get("init_from"):
+            raise ValueError("frozen_backbone needs init_from: the trained control whose backbone is kept fixed")
+        model.freeze_backbone()
     ema = EMA(model, cfg.get("ema", 0.9995))
     opt = torch.optim.AdamW(param_groups(model, cfg["lr"], cfg["wd"], cfg.get("new_lr", 2.5),
                                          cfg.get("template_lr", 10.0)), lr=cfg["lr"])
@@ -339,6 +392,7 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
     sw = dict(STROKEWARP, **cfg["strokewarp"]) if cfg.get("strokewarp") else None
     y_all = torch.as_tensor(labels, device=device)
     start, step, history = 1, 0, []
+    started = time.time()
     local = LOCAL / name / tag / "last.pt"
     ck = _load_state([out_dir / "last.pt", local], device, log)
     if ck is not None:
@@ -346,6 +400,11 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         ema.module.load_state_dict(ck["ema"])
         opt.load_state_dict(ck["opt"])
         ema.updates, start, step, history = ck["ema_updates"], ck["epoch"] + 1, ck["step"], ck["history"]
+        if "rng" in ck:  # random state for drop-path, jitter and unmatched augmentation (older checkpoints lack it)
+            torch.set_rng_state(ck["rng"]["cpu"].cpu())
+            random.setstate(ck["rng"]["python"])
+            if device == "cuda" and ck["rng"].get("cuda") is not None:
+                torch.cuda.set_rng_state_all([t.cpu() for t in ck["rng"]["cuda"]])
         log(f"{name}/{tag}: resuming at epoch {start}")
 
     for epoch in range(start, cfg["epochs"] + 1):
@@ -354,9 +413,12 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         sums = {}
         gen = torch.Generator().manual_seed(seed * 1000 + epoch)
         perm = train_idx[torch.randperm(len(train_idx), generator=gen).numpy()]
+        aug_gen = None
+        if cfg.get("matched_aug"):
+            aug_gen = torch.Generator(device=device).manual_seed(seed * 7919 + epoch)
         for i in range(steps_per_epoch):
             idx = perm[i * bs:(i + 1) * bs]
-            x_ink = augment(fetch(store, idx, res), aug)
+            x_ink = augment(fetch(store, idx, res), aug, generator=aug_gen)
             if sw is not None and epoch > sw["warmup"]:
                 with torch.no_grad(), torch.autocast("cuda", dtype=amp, enabled=amp is not None):
                     parse = ema.module(store.normalize(x_ink, "gray"), draw=False)
@@ -392,14 +454,17 @@ def train(name, cfg, train_idx, tag, store, labels, work, val_idx=None, num_clas
         if epoch % ckpt_every and epoch < cfg["epochs"]:
             continue
         state = {"model": model.state_dict(), "ema": ema.module.state_dict(), "opt": opt.state_dict(),
-                 "ema_updates": ema.updates, "epoch": epoch, "step": step, "history": history}
+                 "ema_updates": ema.updates, "epoch": epoch, "step": step, "history": history,
+                 "rng": {"cpu": torch.get_rng_state(), "python": random.getstate(),
+                         "cuda": torch.cuda.get_rng_state_all() if device == "cuda" else None}}
         safe_save(state, local, tries=2)
         if epoch % (DRIVE_EVERY * ckpt_every) == 0 and epoch < cfg["epochs"]:
             err = safe_save(state, out_dir / "last.pt")
             if err is not None:
                 log(f"{name}/{tag}: could not copy the checkpoint to {out_dir} ({err}); training goes on")
 
-    final = {"model": ema.module.state_dict(), "cfg": cfg, "history": history}
+    final = {"model": ema.module.state_dict(), "cfg": cfg, "history": history,
+             "meta": run_meta(device, seconds=time.time() - started, resumed=ck is not None)}
     err = safe_save(final, out_dir / "final.pt", tries=6)
     if err is not None:
         backup = LOCAL / name / tag / "final.pt"

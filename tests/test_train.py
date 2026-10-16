@@ -110,11 +110,11 @@ def test_sparse_checkpoints_and_logs_still_resume(setup, monkeypatch):
     calls = []
     real_augment = T.augment
 
-    def crash_in_epoch_4(x, aug):
+    def crash_in_epoch_4(x, aug, generator=None):
         calls.append(1)
         if len(calls) > 3 * steps:
             raise Stop
-        return real_augment(x, aug)
+        return real_augment(x, aug, generator=generator)
 
     monkeypatch.setattr(T, "augment", crash_in_epoch_4)
     logged = []

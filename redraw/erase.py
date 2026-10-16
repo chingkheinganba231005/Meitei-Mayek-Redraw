@@ -3,13 +3,15 @@
 The parse splits the ink into strokes, so an explanation of a decision can be tested by deleting what it
 points at (a deletion test with strokes in place of pixel blocks). Every ink pixel is given to the
 existing stroke whose edge is nearest, if it lies within ``margin`` of that edge, and a stroke is erased
-by setting its pixels to paper. The stroke to erase is chosen in five ways (``CHOOSERS``):
+by setting its pixels to paper. The stroke to erase is chosen in six ways (``CHOOSERS``):
 
     reader, most        the stroke whose absence from the parse lowers the stroke reader's support for
                         the network's class the most (the explanation under test)
     reader, least       the stroke whose absence lowers it the least
     random              any stroke of the parse (fixed draws)
     largest             the stroke with the most ink
+    ink-matched         another stroke whose amount of ink is closest to that of "reader, most"
+                        (separates "this stroke matters" from "this much ink matters")
     gradient x input    the stroke with the most gradient x input of the network that reads the image,
                         summed over the stroke's pixels (a standard pixel attribution, given the same
                         strokes; a first-order estimate of what erasing each stroke does)
@@ -23,7 +25,7 @@ import torch
 from .render import curve_points, pixel_grid, stroke_distance
 from .train import amp_dtype, fetch
 
-CHOOSERS = ("reader, most", "reader, least", "random", "largest", "gradient x input")
+CHOOSERS = ("reader, most", "reader, least", "random", "largest", "ink-matched", "gradient x input")
 
 
 def stroke_pixels(ctrl, width, exist, size, margin=0.04, thresh=0.5, T=32, chunk=16):
@@ -137,6 +139,11 @@ def erase_test(parser, nets, idx, store, bs=64, margin=0.04, seed=0, thresh=0.5)
                   "reader, least": imp.masked_fill(~exist, float("inf")).argmin(1),
                   "random": draws.masked_fill(~exist, -1.0).argmax(1),
                   "largest": ink.masked_fill(~exist, -1.0).argmax(1)}
+        most = choice["reader, most"]
+        rows_ = torch.arange(len(x), device=x.device)
+        gap = (ink - ink[rows_, most].unsqueeze(1)).abs().masked_fill(~exist, float("inf"))
+        gap[rows_, most] = float("inf")
+        choice["ink-matched"] = gap.argmin(1)
         preds = {n: read(net, x) for n, net in nets.items()}
         for n, net in nets.items():
             score = (gradient_x_input(net, x, store, preds[n]) * own.to(x.dtype)).flatten(2).sum(-1)

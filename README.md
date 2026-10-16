@@ -112,13 +112,30 @@ networks and predictions on Google Drive, so after a disconnect it can simply be
 | [`diagnostics`](notebooks/diagnostics.ipynb) | float32 control, how much the networks disagree, a nearest-neighbour memory |
 | [`round3`](notebooks/round3.ipynb) | honest routing, other pretrainings and 224 px input, test-time redrawing, reduced data, damaged scans (validation only) |
 | [`final`](notebooks/final.ipynb) | final networks on training + validation, the test set once, familiarity analysis, damaged scans, reduced data |
-| [`extras`](notebooks/extras.ipynb) | learned templates of all classes, vector (SVG) redrawing, selective prediction, stroke erasure, the routing dial, a second script (Devanagari) |
 
 Open a notebook in Colab with
 `https://colab.research.google.com/github/chingkheinganba231005/Meitei-Mayek-Redraw/blob/main/notebooks/<name>.ipynb`
 and choose a large GPU runtime; the final networks were trained on a G4 runtime (one NVIDIA RTX
-PRO 6000 Blackwell). On the development split, one network of the method trained in about 35
-minutes and the control in about 11.
+PRO 6000 Blackwell). In round 3, one network of the method trained in about 35 minutes on the
+development split and the control in about 11.
+
+### Further experiments
+
+A second set of notebooks tests the parts of the method one at a time. They reuse the networks
+above (same Drive folder), record the data and split hashes and the environment of every session,
+and write their results to `MyDrive/redraw/revision`, with a ZIP of everything small in
+`revision/exports`. Every step can be interrupted and run again.
+
+| notebook | what it does | GPU time |
+|---|---|---|
+| [`rev1_audit`](notebooks/rev1_audit.ipynb) | unit tests; which loss trains which parameters, for every configuration; the learned check scales; sampled against exact rendering; paired tests, per-class results and check transitions from the saved predictions; cost | 30 min |
+| [`rev2_core`](notebooks/rev2_core.ipynb) | development split: the two routing rules in a 2 x 2 design, readers that see only geometry, only features or a fixed grid, slots without a rendering loss, staged training on a frozen control (three seeds) | 10 h |
+| [`rev3_reconstruction`](notebooks/rev3_reconstruction.ipynb) | reconstruction against skeleton tracing and per-image optimisation, stability of the parse, probes, stroke erasure with controls, the check (transitions, margins, selective prediction, refitting), figures | 2 h |
+| [`rev4_seeds_robustness`](notebooks/rev4_seeds_robustness.ipynb) | seeds 3 and 4 of the control and the method, seeds 1 and 2 of coupled routing, damaged images before and after preprocessing, texture against shape, the routing dial on validation | 6 h |
+| [`rev5_second_dataset`](notebooks/rev5_second_dataset.ipynb) | the Devanagari Handwritten Character Dataset with the same recipe: control, method and coupled routing, three seeds each | 5 h |
+
+Run `rev1_audit` first and once more at the end. The notebooks are built from the `.py` files next
+to them with `python notebooks/make_ipynb.py`.
 
 ## Using the code
 
@@ -150,7 +167,12 @@ probs = predict(model, idx["test"], cfg, store)["logits"]
 | `redraw/train.py` | training loop (weight averaging, resumable checkpoints), prediction, parse and check evaluation |
 | `redraw/strokewarp.py` | StrokeWarp and test-time redrawing |
 | `redraw/erase.py` | the stroke-erasure test of the explanations |
-| `redraw/analysis.py` | McNemar tests, bootstrap intervals, familiarity, risk-coverage curves |
+| `redraw/explain.py` | interventions on the reader's input, recognition from the drawings, analysis of the check |
+| `redraw/audit.py` | which loss trains which parameters, as an executable check |
+| `redraw/recon.py` | reconstruction metrics, the skeleton and optimisation baselines, parse stability |
+| `redraw/analysis.py`, `stats.py` | McNemar tests, bootstrap intervals, paired comparisons across seeds, familiarity, risk-coverage curves |
+| `redraw/bench.py`, `manifest.py` | cost measurements; hashes, environment records and result archives |
+| `redraw/experiments.py` | the further experiments, one function each |
 | `redraw/split.py`, `preprocess.py`, `data.py`, `augment.py`, `robustness.py` | data split, preprocessing, GPU augmentation and synthetic damage |
 | `notebooks/` | the experiments, as notebooks and as plain Python scripts |
 | `results/` | the results files written by the notebooks |

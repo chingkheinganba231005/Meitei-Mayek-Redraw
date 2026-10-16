@@ -47,17 +47,38 @@ def stroke_distance(pts, grid):
     return d.min(-1).values.view(B, K, -1)
 
 
-def render(ctrl, width, exist, G=48, T=32, tau=None):
+def segment_distance(pts, grid, chunk=8):
+    """Exact distance from each pixel to the polyline through each stroke's samples, (B, K, P).
+
+    ``stroke_distance`` measures the distance to the nearest sample, which leaves small gaps along a
+    stroke that is thinner than the spacing of its samples; this one does not. It needs T times more
+    memory, so it is computed ``chunk`` images at a time (used for evaluation and figures).
+    """
+    B, K, T, _ = pts.shape
+    out = []
+    p = grid.view(1, 1, 1, -1, 2)
+    for i in range(0, B, chunk):
+        a, b = pts[i:i + chunk, :, :-1].unsqueeze(3), pts[i:i + chunk, :, 1:].unsqueeze(3)   # (b, K, T-1, 1, 2)
+        ab = b - a
+        t = ((p - a) * ab).sum(-1) / (ab * ab).sum(-1).clamp_min(1e-12)
+        proj = a + t.clamp(0, 1).unsqueeze(-1) * ab
+        out.append((p - proj).norm(dim=-1).min(2).values)
+    return torch.cat(out)
+
+
+def render(ctrl, width, exist, G=48, T=32, tau=None, exact=False):
     """Soft raster of the strokes.
 
     ctrl (B, K, 4, 2), width (B, K) and exist (B, K), all in [0, 1].
     Returns the image (B, G, G), the per-stroke distances (B, K, G*G) and the
-    curve samples (B, K, T, 2).
+    curve samples (B, K, T, 2). Training uses the distance to the nearest of the T samples;
+    ``exact`` uses the distance to the polyline through them (for evaluation and figures).
     """
     B, K = ctrl.shape[:2]
     tau = tau or 0.5 / G  # edge softness: half a pixel
     pts = curve_points(ctrl, T)
-    d = stroke_distance(pts, pixel_grid(G, ctrl.device, ctrl.dtype))
+    grid = pixel_grid(G, ctrl.device, ctrl.dtype)
+    d = segment_distance(pts, grid) if exact else stroke_distance(pts, grid)
     cover = torch.sigmoid((width.unsqueeze(-1) / 2 - d) / tau) * exist.unsqueeze(-1)
     img = 1 - torch.exp(torch.log1p(-cover.clamp(max=1 - 1e-6)).sum(1))  # 1 - prod(1 - c)
     return img.view(B, G, G), d, pts

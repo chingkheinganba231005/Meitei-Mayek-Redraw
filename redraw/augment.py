@@ -34,18 +34,24 @@ def _gauss(device):
     return _GAUSS[device]
 
 
-def augment(x, aug=AUG):
-    """Random affine + elastic warp on all channels, stroke/ink changes on channel 0."""
+def augment(x, aug=AUG, generator=None):
+    """Random affine + elastic warp on all channels, stroke/ink changes on channel 0.
+
+    ``generator`` (on the device of ``x``) makes the random draws independent of everything else that
+    uses random numbers, so two different networks trained with the same generator seed see exactly the
+    same augmented images.
+    """
     if aug is None:
         return x
     B, C, H, W = x.shape
     dev = x.device
+    g_ = generator
 
     def u(lo, hi):
-        return torch.empty(B, device=dev).uniform_(lo, hi)
+        return torch.empty(B, device=dev).uniform_(lo, hi, generator=g_)
 
     def chance(p):
-        return (torch.rand(B, device=dev) < p).float().view(B, 1, 1, 1)
+        return (torch.rand(B, device=dev, generator=g_) < p).float().view(B, 1, 1, 1)
 
     ang = u(-aug["rot"], aug["rot"]) * math.pi / 180
     sh = u(-aug["shear"], aug["shear"])
@@ -55,19 +61,19 @@ def augment(x, aug=AUG):
     theta = torch.stack([torch.stack([cos * sx, (cos * sh - sin) * sy, tx], 1),
                          torch.stack([sin * sx, (sin * sh + cos) * sy, ty], 1)], 1)
     grid = F.affine_grid(theta, (B, C, H, W), align_corners=False)
-    warp = torch.randn(B, 2, 5, 5, device=dev) * aug["elastic"] * chance(aug["p_elastic"])
+    warp = torch.randn(B, 2, 5, 5, device=dev, generator=g_) * aug["elastic"] * chance(aug["p_elastic"])
     grid = grid + F.interpolate(warp, size=(H, W), mode="bicubic", align_corners=False).permute(0, 2, 3, 1)
     x = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
 
     g = x[:, :1]
-    pick = torch.rand(B, device=dev).view(B, 1, 1, 1)
+    pick = torch.rand(B, device=dev, generator=g_).view(B, 1, 1, 1)
     thick, thin = F.max_pool2d(g, 3, 1, 1), -F.max_pool2d(-g, 3, 1, 1)
     g = torch.where(pick < aug["p_thick"], thick, torch.where(pick > 1 - aug["p_thin"], thin, g))
     gamma = torch.exp(u(-aug["gamma"], aug["gamma"])).view(B, 1, 1, 1)
     g = g.clamp_min(1e-4) ** gamma * u(1 - aug["contrast"], 1.0).view(B, 1, 1, 1)
     blur = chance(aug["p_blur"])
     g = blur * F.conv2d(F.pad(g, (1, 1, 1, 1), mode="replicate"), _gauss(dev)) + (1 - blur) * g
-    g = g + torch.randn_like(g) * aug["noise"] * chance(aug["p_noise"])
+    g = g + torch.randn(g.shape, device=dev, dtype=g.dtype, generator=g_) * aug["noise"] * chance(aug["p_noise"])
     x = torch.cat([g.clamp(0, 1), x[:, 1:]], 1)
 
     # small blank rectangle, rarely
